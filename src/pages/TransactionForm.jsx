@@ -19,9 +19,12 @@ const SERVICE_PROVIDERS = [
   'Self',
 ];
 
+const TRADE_TYPES = ['Option', 'Stock'];
+
 const defaultForm = {
   date: format(new Date(), 'yyyy-MM-dd'),
   day: '',
+  tradeType: 'Option',
   symbol: '',
   optionCount: '',
   buyPrice: '',
@@ -35,13 +38,14 @@ const defaultForm = {
 };
 
 function calcDerived(form) {
-  const optCount = parseFloat(form.optionCount) || 1;
+  const count = parseFloat(form.optionCount) || 1;
+  const multiplier = form.tradeType === 'Stock' ? 1 : 100;
   let buyAmount = form.buyAmount;
   let sellAmount = form.sellAmount;
   let pl = form.pl;
 
-  if (form.buyPrice && !form.buyAmount) buyAmount = (parseFloat(form.buyPrice) * optCount * 100).toFixed(2);
-  if (form.sellPrice && !form.sellAmount) sellAmount = (parseFloat(form.sellPrice) * optCount * 100).toFixed(2);
+  if (form.buyPrice && !form.buyAmount) buyAmount = (parseFloat(form.buyPrice) * count * multiplier).toFixed(2);
+  if (form.sellPrice && !form.sellAmount) sellAmount = (parseFloat(form.sellPrice) * count * multiplier).toFixed(2);
   if (buyAmount && sellAmount && !form.pl) pl = (parseFloat(sellAmount) - parseFloat(buyAmount)).toFixed(2);
 
   const day = form.date ? DAYS[new Date(form.date + 'T12:00:00').getDay()] : '';
@@ -110,7 +114,7 @@ export default function TransactionForm() {
     setForm(updated);
   };
 
-  const autoCalc = () => setForm((f) => calcDerived(f));
+  const autoCalc = () => setForm((f) => calcDerived({ ...f, buyAmount: '', sellAmount: '', pl: '' }));
 
   const submit = (e) => {
     e.preventDefault();
@@ -159,12 +163,19 @@ export default function TransactionForm() {
               label="Day" name="day" readOnly placeholder="Auto"
               value={form.day} onChange={set('day')}
             />
+            <SelectField
+              label="Trade Type" name="tradeType"
+              options={TRADE_TYPES}
+              placeholder="Select type…"
+              value={form.tradeType} onChange={set('tradeType')}
+            />
             <Field
               label="Stock Symbol *" name="symbol" placeholder="AAPL"
               value={form.symbol} onChange={set('symbol')}
             />
             <Field
-              label="Option Count" name="optionCount" type="number" placeholder="1"
+              label={form.tradeType === 'Stock' ? 'Share Count' : 'Option Count'}
+              name="optionCount" type="number" placeholder="1"
               value={form.optionCount} onChange={set('optionCount')}
             />
             <SelectField
