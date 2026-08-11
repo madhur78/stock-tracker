@@ -16,6 +16,9 @@ const SERVICE_PROVIDERS = [
   'SniperAlert',
   'Cole',
   'SmartIRT',
+  'Lexington',
+  'GenZTrade',
+  'Stock PlayMaker (X)',
   'Self',
 ];
 

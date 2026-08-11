@@ -16,6 +16,9 @@ import Reports from './pages/Reports';
 import MarketWatch from './pages/MarketWatch';
 import NewsResearch from './pages/NewsResearch';
 import Settings from './pages/Settings';
+import AvgCostCalculator from './pages/AvgCostCalculator';
+import StockReport from './pages/StockReport';
+import TokenDashboard from './pages/TokenDashboard';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -56,6 +59,9 @@ export default function App() {
                 <Route path="/news" element={<PrivateRoute><NewsResearch /></PrivateRoute>} />
                 <Route path="/export" element={<PrivateRoute><Export /></PrivateRoute>} />
                 <Route path="/settings" element={<PrivateRoute><Settings /></PrivateRoute>} />
+                <Route path="/avg-cost" element={<PrivateRoute><AvgCostCalculator /></PrivateRoute>} />
+                <Route path="/stock-report" element={<PrivateRoute><StockReport /></PrivateRoute>} />
+                <Route path="/token-usage" element={<PrivateRoute><TokenDashboard /></PrivateRoute>} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </DataProvider>

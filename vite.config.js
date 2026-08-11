@@ -2,6 +2,180 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import https from 'https';
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
+
+// ─── Usage tracking ────────────────────────────────────────────────────────────
+
+const USAGE_FILE = path.join(process.cwd(), 'usage-log.json');
+const MAX_ENTRIES = 2000;
+
+// { claudeCalls: [...], requestCounts: { market, history, news } }
+let usageStore = { claudeCalls: [], requestCounts: { market: 0, history: 0, news: 0 } };
+
+try {
+  if (fs.existsSync(USAGE_FILE)) {
+    usageStore = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
+    usageStore.requestCounts ??= { market: 0, history: 0, news: 0 };
+  }
+} catch (_) {}
+
+function saveUsage() {
+  try { fs.writeFileSync(USAGE_FILE, JSON.stringify(usageStore)); } catch (_) {}
+}
+
+function logClaudeCall({ symbol, model, inputTokens, outputTokens }) {
+  const INPUT_PER_M  = 0.80;
+  const OUTPUT_PER_M = 4.00;
+  const costUSD = (inputTokens * INPUT_PER_M + outputTokens * OUTPUT_PER_M) / 1_000_000;
+  usageStore.claudeCalls.push({
+    ts: Date.now(),
+    date: new Date().toISOString().slice(0, 10),
+    symbol, model, inputTokens, outputTokens, costUSD,
+  });
+  if (usageStore.claudeCalls.length > MAX_ENTRIES)
+    usageStore.claudeCalls = usageStore.claudeCalls.slice(-MAX_ENTRIES);
+  saveUsage();
+}
+
+function incRequest(type) {
+  usageStore.requestCounts[type] = (usageStore.requestCounts[type] || 0) + 1;
+}
+
+// ─── Shared utilities (used by all plugins) ────────────────────────────────────
+
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+function nodeRequest(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const lib = parsedUrl.protocol === 'https:' ? https : http;
+    const reqOptions = {
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: options.method || 'GET',
+      headers: {
+        'User-Agent': UA,
+        'Accept-Language': 'en-US,en;q=0.9',
+        ...options.headers,
+      },
+    };
+
+    const req = lib.request(reqOptions, (res) => {
+      if (
+        [301, 302, 303, 307, 308].includes(res.statusCode) &&
+        res.headers.location &&
+        (options.redirects ?? 0) < 5
+      ) {
+        const nextUrl = new URL(res.headers.location, url).toString();
+        const newCookies = mergeCookies(options.cookieJar || '', res.headers['set-cookie'] || []);
+        resolve(nodeRequest(nextUrl, { ...options, redirects: (options.redirects ?? 0) + 1, cookieJar: newCookies }));
+        res.resume();
+        return;
+      }
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({
+        status: res.statusCode,
+        headers: res.headers,
+        body,
+        setCookies: res.headers['set-cookie'] || [],
+      }));
+    });
+
+    req.on('error', reject);
+    req.setTimeout(15_000, () => { req.destroy(); reject(new Error('Request timed out')); });
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+function mergeCookies(existing, setCookieHeaders) {
+  const jar = {};
+  for (const part of existing.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k) jar[k.trim()] = v.join('=').trim();
+  }
+  const SKIP = new Set(['path', 'domain', 'expires', 'max-age', 'samesite', 'secure', 'httponly']);
+  for (const header of setCookieHeaders) {
+    const [k, ...v] = header.split(';')[0].split('=');
+    const name = k.trim();
+    if (!SKIP.has(name.toLowerCase())) jar[name] = v.join('=').trim();
+  }
+  return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+// ─── Shared Yahoo Finance session (one session, all plugins) ───────────────────
+
+const SESSION_FILE = path.join(process.cwd(), '.yf-session.json');
+
+let yfSession = null;
+let yfUnavailable = false;
+let yfRetryAfter = 0;
+
+// Load cached session from disk (survives server restarts)
+try {
+  if (fs.existsSync(SESSION_FILE)) {
+    const cached = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+    if (cached && cached.expiresAt && cached.expiresAt > Date.now() + 60_000) {
+      yfSession = cached;
+      console.log('[market] ✓ Loaded Yahoo Finance session from cache');
+    }
+  }
+} catch (_) {}
+
+async function initYFSession() {
+  console.log('[market] Initialising Yahoo Finance session…');
+  let cookies = '';
+
+  try {
+    const r = await nodeRequest('https://fc.yahoo.com', { headers: { Accept: 'text/html' } });
+    cookies = mergeCookies(cookies, r.setCookies);
+  } catch (_) { /* optional */ }
+
+  for (const host of ['query2.finance.yahoo.com', 'query1.finance.yahoo.com']) {
+    try {
+      const r = await nodeRequest(`https://${host}/v1/test/getcrumb`, {
+        headers: {
+          Accept: 'text/plain, */*',
+          Cookie: cookies,
+          Referer: 'https://finance.yahoo.com/',
+        },
+      });
+      cookies = mergeCookies(cookies, r.setCookies);
+      const crumb = r.body.trim();
+      if (r.status === 200 && crumb && crumb !== 'Too Many Requests' && crumb.length < 30) {
+        const sess = { cookies, crumb, expiresAt: Date.now() + 55 * 60 * 1000 };
+        console.log(`[market] ✓ Yahoo Finance session ready (crumb from ${host})`);
+        try { fs.writeFileSync(SESSION_FILE, JSON.stringify(sess)); } catch (_) {}
+        return sess;
+      }
+      console.warn(`[market] Crumb ${host} → HTTP ${r.status}: "${crumb.slice(0, 60)}"`);
+    } catch (e) {
+      console.warn(`[market] Crumb ${host} failed:`, e.message);
+    }
+  }
+
+  throw new Error('Yahoo Finance crumb unavailable (rate limited or blocked)');
+}
+
+async function getYFSession() {
+  if (yfSession && Date.now() < yfSession.expiresAt) return yfSession;
+  if (yfUnavailable && Date.now() < yfRetryAfter) return null;
+  try {
+    yfSession = await initYFSession();
+    yfUnavailable = false;
+    return yfSession;
+  } catch (e) {
+    console.warn('[market] Yahoo Finance session failed, falling back to stooq:', e.message);
+    yfUnavailable = true;
+    yfRetryAfter = Date.now() + 10 * 60 * 1000;
+    yfSession = null;
+    return null;
+  }
+}
 
 // ─── Yahoo Finance proxy plugin ────────────────────────────────────────────────
 //
@@ -13,133 +187,6 @@ import http from 'http';
 //   GET /api/health                          → { ok: true }
 
 function yahooFinancePlugin() {
-  const UA =
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
-    '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
-
-  // Yahoo Finance session state (shared, refreshed when stale)
-  let yfSession = null; // { cookies, crumb, expiresAt }
-  let yfUnavailable = false; // true after confirmed failures, retry after 5 min
-  let yfRetryAfter = 0;
-
-  // ── Low-level HTTPS request with redirect following
-  function nodeRequest(url, options = {}) {
-    return new Promise((resolve, reject) => {
-      const parsedUrl = new URL(url);
-      const lib = parsedUrl.protocol === 'https:' ? https : http;
-      const reqOptions = {
-        hostname: parsedUrl.hostname,
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: options.method || 'GET',
-        headers: {
-          'User-Agent': UA,
-          'Accept-Language': 'en-US,en;q=0.9',
-          ...options.headers,
-        },
-      };
-
-      const req = lib.request(reqOptions, (res) => {
-        if (
-          [301, 302, 303, 307, 308].includes(res.statusCode) &&
-          res.headers.location &&
-          (options.redirects ?? 0) < 5
-        ) {
-          const nextUrl = new URL(res.headers.location, url).toString();
-          const newCookies = mergeCookies(options.cookieJar || '', res.headers['set-cookie'] || []);
-          resolve(nodeRequest(nextUrl, { ...options, redirects: (options.redirects ?? 0) + 1, cookieJar: newCookies }));
-          res.resume();
-          return;
-        }
-        let body = '';
-        res.on('data', (chunk) => { body += chunk; });
-        res.on('end', () => resolve({
-          status: res.statusCode,
-          headers: res.headers,
-          body,
-          setCookies: res.headers['set-cookie'] || [],
-        }));
-      });
-
-      req.on('error', reject);
-      req.setTimeout(15_000, () => { req.destroy(); reject(new Error('Request timed out')); });
-      req.end();
-    });
-  }
-
-  function mergeCookies(existing, setCookieHeaders) {
-    const jar = {};
-    for (const part of existing.split(';')) {
-      const [k, ...v] = part.trim().split('=');
-      if (k) jar[k.trim()] = v.join('=').trim();
-    }
-    const SKIP = new Set(['path', 'domain', 'expires', 'max-age', 'samesite', 'secure', 'httponly']);
-    for (const header of setCookieHeaders) {
-      const [k, ...v] = header.split(';')[0].split('=');
-      const name = k.trim();
-      if (!SKIP.has(name.toLowerCase())) jar[name] = v.join('=').trim();
-    }
-    return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
-  }
-
-  // ── Establish Yahoo Finance session (cookies + crumb)
-  async function initYFSession() {
-    console.log('[market] Initialising Yahoo Finance session…');
-    let cookies = '';
-
-    try {
-      const r = await nodeRequest('https://fc.yahoo.com', { headers: { Accept: 'text/html' } });
-      cookies = mergeCookies(cookies, r.setCookies);
-    } catch (_) { /* optional */ }
-
-    try {
-      const r = await nodeRequest('https://finance.yahoo.com/', {
-        headers: { Accept: 'text/html,application/xhtml+xml', Cookie: cookies },
-        cookieJar: cookies,
-      });
-      cookies = mergeCookies(cookies, r.setCookies);
-    } catch (e) {
-      console.warn('[market] finance.yahoo.com page fetch failed:', e.message);
-    }
-
-    for (const host of ['query2.finance.yahoo.com', 'query1.finance.yahoo.com']) {
-      try {
-        const r = await nodeRequest(`https://${host}/v1/test/getcrumb`, {
-          headers: {
-            Accept: 'text/plain, */*',
-            Cookie: cookies,
-            Referer: 'https://finance.yahoo.com/',
-          },
-        });
-        cookies = mergeCookies(cookies, r.setCookies);
-        const crumb = r.body.trim();
-        if (r.status === 200 && crumb && crumb !== 'Too Many Requests') {
-          console.log(`[market] ✓ Yahoo Finance session ready (crumb from ${host})`);
-          return { cookies, crumb, expiresAt: Date.now() + 55 * 60 * 1000 };
-        }
-        console.warn(`[market] Crumb ${host} → HTTP ${r.status}: "${crumb.slice(0, 60)}"`);
-      } catch (e) {
-        console.warn(`[market] Crumb ${host} failed:`, e.message);
-      }
-    }
-
-    throw new Error('Yahoo Finance crumb unavailable (rate limited or blocked)');
-  }
-
-  async function getYFSession() {
-    if (yfUnavailable && Date.now() < yfRetryAfter) return null;
-    if (yfSession && Date.now() < yfSession.expiresAt) return yfSession;
-    try {
-      yfSession = await initYFSession();
-      yfUnavailable = false;
-      return yfSession;
-    } catch (e) {
-      console.warn('[market] Yahoo Finance session failed, falling back to stooq:', e.message);
-      yfUnavailable = true;
-      yfRetryAfter = Date.now() + 5 * 60 * 1000; // retry in 5 min
-      yfSession = null;
-      return null;
-    }
-  }
 
   // ── Fetch a batch via Yahoo Finance v7 quote API
   async function fetchYFBatch(symbols, sess) {
@@ -306,6 +353,7 @@ function yahooFinancePlugin() {
       }
 
       const result = await fetchAllQuotes(symbols);
+      incRequest('market');
       res.writeHead(200);
       res.end(JSON.stringify({ quoteResponse: { result, error: null } }));
     } catch (err) {
@@ -321,10 +369,147 @@ function yahooFinancePlugin() {
     res.end(JSON.stringify({ ok: true, source: 'yahoo-finance-v7+stooq-fallback' }));
   }
 
+  async function stockInfoHandler(req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    const p      = new URL(req.url, 'http://localhost');
+    const symbol = p.searchParams.get('symbol')?.trim().toUpperCase();
+    if (!symbol) { res.writeHead(400); res.end(JSON.stringify({ error: 'symbol required' })); return; }
+
+    const modules = 'assetProfile,financialData,recommendationTrend,defaultKeyStatistics';
+    const WIN_UA  = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+    async function fetchSummary(host, crumb = null, cookies = null) {
+      const crumbParam = crumb ? `&crumb=${encodeURIComponent(crumb)}` : '';
+      const r = await nodeRequest(
+        `https://${host}/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}${crumbParam}&lang=en-US&region=US&corsDomain=finance.yahoo.com`,
+        { headers: { 'User-Agent': WIN_UA, Accept: 'application/json', Referer: 'https://finance.yahoo.com/', ...(cookies ? { Cookie: cookies } : {}) } },
+      );
+      if (r.status === 404) throw new Error(`Symbol "${symbol}" not found on Yahoo Finance.`);
+      if (r.status !== 200) throw new Error(`Yahoo Finance returned HTTP ${r.status}`);
+      const json   = JSON.parse(r.body);
+      const result = json?.quoteSummary?.result?.[0];
+      if (!result) throw new Error('No summary data returned.');
+      return result;
+    }
+
+    try {
+      let result;
+      // Try query2 without auth first (works for some endpoints)
+      try {
+        result = await fetchSummary('query2.finance.yahoo.com');
+      } catch (_) {
+        // Fall back to authenticated query1
+        const sess = await getYFSession();
+        if (!sess) throw new Error('Yahoo Finance session unavailable — please wait a moment and try again.');
+        result = await fetchSummary('query1.finance.yahoo.com', sess.crumb, sess.cookies);
+      }
+
+      const profile   = result.assetProfile         ?? {};
+      const financial = result.financialData         ?? {};
+      const stats     = result.defaultKeyStatistics  ?? {};
+      const trend     = result.recommendationTrend?.trend?.[0] ?? {};
+
+      const raw = v => (v && typeof v === 'object' ? v.raw : v) ?? null;
+
+      const data = {
+        symbol,
+        company: {
+          sector:      profile.sector              ?? null,
+          industry:    profile.industry            ?? null,
+          description: profile.longBusinessSummary ?? null,
+          employees:   profile.fullTimeEmployees   ?? null,
+          country:     profile.country             ?? null,
+          website:     profile.website             ?? null,
+        },
+        analysts: {
+          count:          raw(financial.numberOfAnalystOpinions),
+          recommendation: financial.recommendationKey ?? null,
+          score:          raw(financial.recommendationMean),
+          targetLow:      raw(financial.targetLowPrice),
+          targetHigh:     raw(financial.targetHighPrice),
+          targetMean:     raw(financial.targetMeanPrice),
+          targetMedian:   raw(financial.targetMedianPrice),
+          revenueGrowth:  raw(financial.revenueGrowth),
+          earningsGrowth: raw(financial.earningsGrowth),
+        },
+        sentiment: {
+          strongBuy:  trend.strongBuy  ?? 0,
+          buy:        trend.buy        ?? 0,
+          hold:       trend.hold       ?? 0,
+          sell:       trend.sell       ?? 0,
+          strongSell: trend.strongSell ?? 0,
+        },
+        stats: {
+          marketCap:    raw(stats.marketCap),
+          trailingPE:   raw(stats.trailingPE),
+          forwardPE:    raw(stats.forwardPE),
+          beta:         raw(stats.beta),
+          weekChange52: raw(stats['52WeekChange']),
+          priceToBook:  raw(stats.priceToBook),
+          dividend:     raw(stats.lastDividendValue),
+        },
+        aiInsight: null,
+      };
+
+      // Optional Claude AI insight
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (apiKey && data.company.description) {
+        try {
+          const prompt =
+            `You are a concise financial analyst. Based on the following data for ${symbol}, write a brief investment insight (4-6 bullet points, plain English, no markdown headers).\n\n` +
+            `Sector: ${data.company.sector} | Industry: ${data.company.industry}\n` +
+            `Analyst consensus: ${data.analysts.recommendation ?? 'N/A'} (score ${data.analysts.score ?? '—'}/5, ${data.analysts.count ?? '?'} analysts)\n` +
+            `Price target: $${data.analysts.targetLow ?? '?'} – $${data.analysts.targetHigh ?? '?'} (mean $${data.analysts.targetMean ?? '?'})\n` +
+            `Revenue growth: ${data.analysts.revenueGrowth != null ? (data.analysts.revenueGrowth * 100).toFixed(1) + '%' : 'N/A'} | Earnings growth: ${data.analysts.earningsGrowth != null ? (data.analysts.earningsGrowth * 100).toFixed(1) + '%' : 'N/A'}\n` +
+            `Beta: ${data.stats.beta ?? 'N/A'} | P/E: ${data.stats.trailingPE ?? 'N/A'} | Forward P/E: ${data.stats.forwardPE ?? 'N/A'}\n\n` +
+            `Company: ${data.company.description?.slice(0, 400)}\n\n` +
+            `Respond with ONLY a JSON array of 4-6 strings, each a concise insight bullet. No other text.`;
+
+          const aiResp = await nodeRequest('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': apiKey,
+              'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5-20251001',
+              max_tokens: 600,
+              messages: [{ role: 'user', content: prompt }],
+            }),
+          });
+
+          if (aiResp.status === 200) {
+            const parsed = JSON.parse(aiResp.body);
+            const usage  = parsed.usage;
+            if (usage) logClaudeCall({ symbol, model: 'claude-haiku-4-5-20251001', inputTokens: usage.input_tokens, outputTokens: usage.output_tokens });
+            const text  = parsed.content?.[0]?.text ?? '';
+            const match = text.match(/\[[\s\S]*\]/);
+            if (match) data.aiInsight = JSON.parse(match[0]);
+          }
+        } catch (e) {
+          console.warn('[stock-info] AI insight failed:', e.message);
+        }
+      }
+
+      console.log(`[stock-info] ${symbol} — ${data.company.sector ?? 'unknown sector'}`);
+      res.writeHead(200);
+      res.end(JSON.stringify(data));
+    } catch (err) {
+      console.error('[stock-info]', err.message);
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   function addMiddleware(server) {
     server.middlewares.use((req, res, next) => {
-      if (req.url?.startsWith('/api/quotes')) return quotesHandler(req, res);
-      if (req.url?.startsWith('/api/health')) return healthHandler(req, res);
+      if (req.url?.startsWith('/api/quotes'))     return quotesHandler(req, res);
+      if (req.url?.startsWith('/api/health'))     return healthHandler(req, res);
+      if (req.url?.startsWith('/api/stock-info')) return stockInfoHandler(req, res);
       next();
     });
 
@@ -478,7 +663,11 @@ function newsPlugin() {
         return null;
       }
 
-      const text = JSON.parse(resp.body).content?.[0]?.text ?? '';
+      const parsed = JSON.parse(resp.body);
+      const usage  = parsed.usage;
+      if (usage) logClaudeCall({ symbol, model: 'claude-haiku-4-5-20251001', inputTokens: usage.input_tokens, outputTokens: usage.output_tokens });
+
+      const text = parsed.content?.[0]?.text ?? '';
       // Extract JSON object from the response (handles any stray markdown)
       const match = text.match(/\{[\s\S]*\}/);
       return match ? JSON.parse(match[0]) : null;
@@ -524,6 +713,7 @@ function newsPlugin() {
 
       const articles = rawItems.slice(0, 25).map(a => ({ ...a, category: categorize(a.title) }));
       const summary  = await getAISummary(symbol, articles);
+      incRequest('news');
 
       res.writeHead(200);
       res.end(JSON.stringify({ symbol, articles, summary, lastUpdated: new Date().toISOString() }));
@@ -552,8 +742,183 @@ function newsPlugin() {
   };
 }
 
+// ─── Historical OHLC plugin ────────────────────────────────────────────────────
+//
+// Endpoint:
+//   GET /api/history?symbol=AAPL&from=2024-01-01&to=2024-12-31
+//   → { symbol, from, to, data: [{ date, open, high, low, close, volume,
+//                                   prevClose, gap, gapPct }] }
+//
+// Uses the shared Yahoo Finance session (cookies + crumb) established by
+// yahooFinancePlugin so we don't create a second competing session.
+
+function historyPlugin() {
+  async function fetchHistory(symbol, from, to) {
+    const p1 = Math.floor(new Date(from + 'T00:00:00Z').getTime() / 1000);
+    const p2 = Math.floor(new Date(to   + 'T23:59:59Z').getTime() / 1000);
+
+    // Try query2 first (no crumb needed), then fall back to authenticated query1
+    const attempts = [
+      {
+        url: `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+             `?interval=1d&period1=${p1}&period2=${p2}&events=history`,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+          'Accept-Language': 'en-US,en;q=0.9',
+          Referer: 'https://finance.yahoo.com/',
+          Origin: 'https://finance.yahoo.com',
+        },
+      },
+    ];
+
+    // Add authenticated attempt if session is available
+    const sess = await getYFSession();
+    if (sess) {
+      attempts.push({
+        url: `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+             `?interval=1d&period1=${p1}&period2=${p2}&crumb=${encodeURIComponent(sess.crumb)}&events=history`,
+        headers: {
+          Accept: 'application/json',
+          Cookie: sess.cookies,
+          Referer: 'https://finance.yahoo.com/',
+        },
+      });
+    }
+
+    let lastError = 'All data sources failed.';
+    for (const attempt of attempts) {
+      try {
+        const r = await nodeRequest(attempt.url, { headers: attempt.headers });
+        if (r.status === 404) throw new Error(`Symbol "${symbol}" not found.`);
+        if (r.status !== 200) { lastError = `Yahoo Finance returned HTTP ${r.status}`; continue; }
+
+        const json   = JSON.parse(r.body);
+        const result = json?.chart?.result?.[0];
+        if (!result) { lastError = 'No chart data returned — check symbol and date range.'; continue; }
+
+        const timestamps = result.timestamp ?? [];
+        const q          = result.indicators?.quote?.[0] ?? {};
+        const rows = timestamps
+          .map((ts, i) => {
+            const open  = q.open?.[i];
+            const close = q.close?.[i];
+            if (open == null || close == null) return null;
+            return {
+              date:   new Date(ts * 1000).toISOString().slice(0, 10),
+              open:   Math.round(open                * 100) / 100,
+              high:   Math.round((q.high?.[i] ?? 0)  * 100) / 100,
+              low:    Math.round((q.low?.[i]  ?? 0)  * 100) / 100,
+              close:  Math.round(close               * 100) / 100,
+              volume: q.volume?.[i] || 0,
+            };
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.date.localeCompare(b.date));
+
+        if (!rows.length) throw new Error('No trading data found for this symbol and date range.');
+
+        const enriched = rows.map((r, i) => {
+          const prevClose = i > 0 ? rows[i - 1].close : null;
+          const gap       = prevClose !== null ? +(r.open - prevClose).toFixed(4) : null;
+          const gapPct    = prevClose !== null ? +((r.open - prevClose) / prevClose * 100).toFixed(4) : null;
+          return { ...r, prevClose, gap, gapPct };
+        });
+
+        console.log(`[history] Yahoo Finance: ${enriched.length} rows for ${symbol}`);
+        return enriched.reverse();
+      } catch (e) {
+        if (e.message.includes('not found')) throw e;
+        lastError = e.message;
+      }
+    }
+    throw new Error(lastError);
+  }
+
+  async function historyHandler(req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    const p      = new URL(req.url, 'http://localhost');
+    const symbol = p.searchParams.get('symbol')?.trim().toUpperCase();
+    const from   = p.searchParams.get('from');
+    const to     = p.searchParams.get('to');
+
+    if (!symbol || !from || !to) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: 'symbol, from, and to parameters are required' }));
+      return;
+    }
+
+    try {
+      const data = await fetchHistory(symbol, from, to);
+      incRequest('history');
+      res.writeHead(200);
+      res.end(JSON.stringify({ symbol, from, to, data }));
+    } catch (err) {
+      console.error('[history]', err.message);
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  function addMiddleware(server) {
+    server.middlewares.use((req, res, next) => {
+      if (req.url?.startsWith('/api/history')) return historyHandler(req, res);
+      next();
+    });
+    server.httpServer?.once('listening', () => {
+      console.log('[history] ✓ Stock history plugin ready (Yahoo Finance v8 chart)\n');
+    });
+  }
+
+  return {
+    name: 'history-proxy',
+    configureServer(server)        { addMiddleware(server); },
+    configurePreviewServer(server) { addMiddleware(server); },
+  };
+}
+
+// ─── Usage API plugin ──────────────────────────────────────────────────────────
+//
+// Endpoints:
+//   GET /api/usage        → full usage store
+//   POST /api/usage/clear → reset all data
+
+function usagePlugin() {
+  function addMiddleware(server) {
+    server.middlewares.use((req, res, next) => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'application/json');
+
+      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+      if (req.url === '/api/usage' && req.method === 'GET') {
+        res.writeHead(200);
+        res.end(JSON.stringify(usageStore));
+        return;
+      }
+      if (req.url === '/api/usage/clear' && req.method === 'POST') {
+        usageStore.claudeCalls = [];
+        usageStore.requestCounts = { market: 0, history: 0, news: 0 };
+        saveUsage();
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      next();
+    });
+  }
+  return {
+    name: 'usage-api',
+    configureServer(server)        { addMiddleware(server); },
+    configurePreviewServer(server) { addMiddleware(server); },
+  };
+}
+
 // ─── Vite config ───────────────────────────────────────────────────────────────
 
 export default defineConfig({
-  plugins: [react(), yahooFinancePlugin(), newsPlugin()],
+  plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin()],
 });
