@@ -19,6 +19,26 @@ const curr = (n) =>
 
 const pct = (n) => `${n.toFixed(1)}%`;
 
+function holdingDays(buyDate, sellDate) {
+  if (!buyDate || !sellDate) return null;
+  const diff = new Date(sellDate + 'T12:00:00') - new Date(buyDate + 'T12:00:00');
+  return Math.round(diff / 86_400_000);
+}
+
+function DaysBadge({ buyDate, sellDate }) {
+  const d = holdingDays(buyDate, sellDate);
+  if (d === null) return <span className="text-gray-300 dark:text-gray-600">—</span>;
+  return (
+    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+      d === 0 ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+      : d <= 5 ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+    }`}>
+      {d === 0 ? '0DTE' : `${d}d`}
+    </span>
+  );
+}
+
 function weekKey(dateStr) {
   const d = parseISO(dateStr);
   const start = startOfWeek(d, { weekStartsOn: 1 });
@@ -247,16 +267,17 @@ function GroupTable({ groups, labelFn }) {
                 </tr>,
                 isOpen && (
                   <tr key={`${g.key}-exp`} className="bg-blue-50/40 dark:bg-blue-950/20">
-                    <td colSpan={9} className="px-4 py-0">
+                    <td colSpan={SORT_COLS.length + 1} className="px-4 py-0">
                       <div className="py-3">
                         <div className="flex gap-3 mb-2">
-                          {['date','symbol','buyAmount','sellAmount','pl'].map(k => (
+                          {['buyDate','date','symbol','buyAmount','sellAmount','pl'].map(k => (
                             <button
                               key={k}
                               onClick={e => { e.stopPropagation(); setTxSort(s => s.key === k ? { key: k, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'desc' }); }}
                               className={`text-xs px-2 py-1 rounded border transition-colors ${txSort.key === k ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
                             >
-                              {k} {txSort.key === k ? (txSort.dir === 'asc' ? '↑' : '↓') : ''}
+                              {k === 'buyDate' ? 'buy date' : k === 'date' ? 'sell date' : k}
+                              {txSort.key === k ? (txSort.dir === 'asc' ? '↑' : '↓') : ''}
                             </button>
                           ))}
                         </div>
@@ -264,7 +285,7 @@ function GroupTable({ groups, labelFn }) {
                           <table className="w-full text-xs">
                             <thead>
                               <tr className="bg-gray-100 dark:bg-gray-800">
-                                {['Date','Symbol','Contracts','Buy Amt','Sell Amt','P/L','Account','Provider','Comments'].map(h => (
+                                {['Buy Date','Sell Date','Days','Symbol','Contracts','Buy Amt','Sell Amt','P/L','Account','Provider','Comments'].map(h => (
                                   <th key={h} className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">{h}</th>
                                 ))}
                               </tr>
@@ -274,7 +295,17 @@ function GroupTable({ groups, labelFn }) {
                                 const tpl = parseFloat(t.pl) || 0;
                                 return (
                                   <tr key={t.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                                    <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{t.date}</td>
+                                    <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                      {t.buyDate
+                                        ? <>{t.buyDate}<span className="ml-1 opacity-60">{t.buyDay?.slice(0,3)}</span></>
+                                        : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                                    </td>
+                                    <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                      {t.date}<span className="ml-1 opacity-60">{t.day?.slice(0,3)}</span>
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      <DaysBadge buyDate={t.buyDate} sellDate={t.date} />
+                                    </td>
                                     <td className="px-3 py-2 font-semibold text-gray-900 dark:text-white">{t.symbol}</td>
                                     <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{t.optionCount || '—'}</td>
                                     <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{curr(t.buyAmount)}</td>
@@ -296,7 +327,7 @@ function GroupTable({ groups, labelFn }) {
               ];
             })}
             {sorted.length === 0 && (
-              <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-gray-400">No data</td></tr>
+              <tr><td colSpan={SORT_COLS.length + 1} className="px-4 py-10 text-center text-sm text-gray-400">No data</td></tr>
             )}
           </tbody>
         </table>

@@ -917,8 +917,111 @@ function usagePlugin() {
   };
 }
 
+// ─── X (Twitter) Feed plugin ──────────────────────────────────────────────────
+//
+// Endpoint:
+//   GET /api/xfeed?symbol=AAPL&max=20
+//   → { symbol, tweets: [...], hasToken: bool }
+//
+// Requires TWITTER_BEARER_TOKEN in environment.
+// Without it the endpoint returns { hasToken: false, tweets: [] } so the
+// frontend can still render the "Open on X" quick-link buttons.
+
+function xFeedPlugin() {
+  const BEARER = process.env.TWITTER_BEARER_TOKEN ?? '';
+
+  async function xGet(path) {
+    const r = await nodeRequest(`https://api.twitter.com${path}`, {
+      headers: {
+        Authorization: `Bearer ${BEARER}`,
+        Accept: 'application/json',
+      },
+    });
+    if (r.status !== 200) {
+      const msg = (() => { try { return JSON.parse(r.body)?.detail ?? r.body.slice(0, 120); } catch { return r.body.slice(0, 120); } })();
+      throw new Error(`Twitter API ${r.status}: ${msg}`);
+    }
+    return JSON.parse(r.body);
+  }
+
+  async function xFeedHandler(req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    const p      = new URL(req.url, 'http://localhost');
+    const symbol = p.searchParams.get('symbol')?.trim().toUpperCase() ?? '';
+    const max    = Math.min(parseInt(p.searchParams.get('max') ?? '20', 10), 50);
+
+    if (!symbol) { res.writeHead(400); res.end(JSON.stringify({ error: 'symbol required' })); return; }
+
+    if (!BEARER) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ symbol, hasToken: false, tweets: [] }));
+      return;
+    }
+
+    try {
+      const query  = encodeURIComponent(`$${symbol} -is:retweet lang:en`);
+      const fields = 'created_at,text,public_metrics,author_id,entities';
+      const expan  = 'author_id';
+      const ufield = 'name,username,profile_image_url,verified,public_metrics';
+
+      const data = await xGet(
+        `/2/tweets/search/recent?query=${query}&max_results=${max}` +
+        `&tweet.fields=${fields}&expansions=${expan}&user.fields=${ufield}`,
+      );
+
+      const usersById = {};
+      for (const u of (data.includes?.users ?? [])) usersById[u.id] = u;
+
+      const tweets = (data.data ?? []).map(t => ({
+        id:        t.id,
+        text:      t.text,
+        createdAt: t.created_at,
+        likes:     t.public_metrics?.like_count    ?? 0,
+        retweets:  t.public_metrics?.retweet_count ?? 0,
+        replies:   t.public_metrics?.reply_count   ?? 0,
+        url:       `https://x.com/i/web/status/${t.id}`,
+        author:    usersById[t.author_id] ? {
+          name:     usersById[t.author_id].name,
+          username: usersById[t.author_id].username,
+          avatar:   usersById[t.author_id].profile_image_url,
+          verified: usersById[t.author_id].verified ?? false,
+          followers: usersById[t.author_id].public_metrics?.followers_count ?? 0,
+          profileUrl: `https://x.com/${usersById[t.author_id].username}`,
+        } : null,
+      }));
+
+      console.log(`[xfeed] ${symbol} — ${tweets.length} tweets`);
+      res.writeHead(200);
+      res.end(JSON.stringify({ symbol, hasToken: true, tweets }));
+    } catch (err) {
+      console.error('[xfeed]', err.message);
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  function addMiddleware(server) {
+    server.middlewares.use((req, res, next) => {
+      if (req.url?.startsWith('/api/xfeed')) return xFeedHandler(req, res);
+      next();
+    });
+    server.httpServer?.once('listening', () => {
+      console.log(`[xfeed]  ✓ X Feed plugin ready (API: ${BEARER ? 'enabled' : 'disabled — set TWITTER_BEARER_TOKEN to enable'})\n`);
+    });
+  }
+
+  return {
+    name: 'xfeed-proxy',
+    configureServer(server)        { addMiddleware(server); },
+    configurePreviewServer(server) { addMiddleware(server); },
+  };
+}
+
 // ─── Vite config ───────────────────────────────────────────────────────────────
 
 export default defineConfig({
-  plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin()],
+  plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin(), xFeedPlugin()],
 });

@@ -19,13 +19,30 @@ const SERVICE_PROVIDERS = [
   'Lexington',
   'GenZTrade',
   'Stock PlayMaker (X)',
+  'Sam Parikh',
   'Self',
 ];
 
 const TRADE_TYPES = ['Option', 'Stock'];
 
+const COMMENT_SUGGESTIONS = [
+  '0DTE',
+  'Auto Expired',
+  'Stop Loss Hit',
+  'Take Profit Hit',
+  'Rolled Out',
+  'Early Exit',
+  'Earnings Play',
+  'Paper Trade',
+  'Closed at Open',
+];
+
+const today = format(new Date(), 'yyyy-MM-dd');
+
 const defaultForm = {
-  date: format(new Date(), 'yyyy-MM-dd'),
+  buyDate: today,
+  buyDay: '',
+  date: today,
   day: '',
   tradeType: 'Option',
   symbol: '',
@@ -51,8 +68,9 @@ function calcDerived(form) {
   if (form.sellPrice && !form.sellAmount) sellAmount = (parseFloat(form.sellPrice) * count * multiplier).toFixed(2);
   if (buyAmount && sellAmount && !form.pl) pl = (parseFloat(sellAmount) - parseFloat(buyAmount)).toFixed(2);
 
-  const day = form.date ? DAYS[new Date(form.date + 'T12:00:00').getDay()] : '';
-  return { ...form, buyAmount, sellAmount, pl, day };
+  const buyDay  = form.buyDate ? DAYS[new Date(form.buyDate + 'T12:00:00').getDay()] : '';
+  const day     = form.date    ? DAYS[new Date(form.date    + 'T12:00:00').getDay()] : '';
+  return { ...form, buyAmount, sellAmount, pl, buyDay, day };
 }
 
 // ─── Reusable field components (defined OUTSIDE the page component so React
@@ -92,6 +110,39 @@ function SelectField({ label, options, value, onChange, placeholder = 'Select…
   );
 }
 
+// Comments field: predefined suggestion chips + free-form textarea
+function CommentsField({ value, onChange }) {
+  const append = (tag) => {
+    const current = (value ?? '').trim();
+    onChange({ target: { value: current ? `${current}, ${tag}` : tag } });
+  };
+
+  return (
+    <div>
+      <label className="label">Comments</label>
+      {/* Quick-tag chips */}
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {COMMENT_SUGGESTIONS.map((tag) => (
+          <button
+            key={tag}
+            type="button"
+            onClick={() => append(tag)}
+            className="px-2.5 py-0.5 text-xs rounded-full border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:border-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+          >
+            {tag}
+          </button>
+        ))}
+      </div>
+      <textarea
+        className="input min-h-[72px] resize-y"
+        placeholder="Select a tag above or type your own notes…"
+        value={value ?? ''}
+        onChange={onChange}
+      />
+    </div>
+  );
+}
+
 // ─── Page component ───────────────────────────────────────────────────────────
 
 export default function TransactionForm() {
@@ -106,14 +157,15 @@ export default function TransactionForm() {
   useEffect(() => {
     if (isEdit) {
       const tx = transactions.find((t) => t.id === id);
-      if (tx) setForm(tx);
+      if (tx) setForm({ ...defaultForm, ...tx });
       else { show('Transaction not found', 'error'); navigate('/transactions'); }
     }
   }, [id]);
 
   const set = (k) => (e) => {
     const updated = { ...form, [k]: e.target.value };
-    if (k === 'date') updated.day = DAYS[new Date(e.target.value + 'T12:00:00').getDay()];
+    if (k === 'buyDate') updated.buyDay = DAYS[new Date(e.target.value + 'T12:00:00').getDay()];
+    if (k === 'date')    updated.day    = DAYS[new Date(e.target.value + 'T12:00:00').getDay()];
     setForm(updated);
   };
 
@@ -122,7 +174,7 @@ export default function TransactionForm() {
   const submit = (e) => {
     e.preventDefault();
     if (!form.symbol.trim()) { show('Stock symbol is required', 'error'); return; }
-    if (!form.date) { show('Date is required', 'error'); return; }
+    if (!form.date) { show('Sell Date is required', 'error'); return; }
     const finalForm = calcDerived(form);
     if (isEdit) {
       updateTransaction(id, finalForm);
@@ -159,36 +211,44 @@ export default function TransactionForm() {
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <Field
-              label="Date *" name="date" type="date"
-              value={form.date} onChange={set('date')}
+              label="Buy Date" type="date"
+              value={form.buyDate} onChange={set('buyDate')}
             />
             <Field
-              label="Day" name="day" readOnly placeholder="Auto"
-              value={form.day} onChange={set('day')}
+              label="Buy Day" readOnly placeholder="Auto"
+              value={form.buyDay} onChange={set('buyDay')}
             />
             <SelectField
-              label="Trade Type" name="tradeType"
+              label="Trade Type"
               options={TRADE_TYPES}
               placeholder="Select type…"
               value={form.tradeType} onChange={set('tradeType')}
             />
             <Field
-              label="Stock Symbol *" name="symbol" placeholder="AAPL"
+              label="Sell Date *" type="date"
+              value={form.date} onChange={set('date')}
+            />
+            <Field
+              label="Sell Day" readOnly placeholder="Auto"
+              value={form.day} onChange={set('day')}
+            />
+            <Field
+              label="Stock Symbol *" placeholder="AAPL"
               value={form.symbol} onChange={set('symbol')}
             />
             <Field
               label={form.tradeType === 'Stock' ? 'Share Count' : 'Option Count'}
-              name="optionCount" type="number" placeholder="1"
+              type="number" placeholder="1"
               value={form.optionCount} onChange={set('optionCount')}
             />
             <SelectField
-              label="Account" name="account"
+              label="Account"
               options={ACCOUNTS}
               placeholder="Select account…"
               value={form.account} onChange={set('account')}
             />
             <SelectField
-              label="Service Provider" name="serviceProvider"
+              label="Service Provider"
               options={SERVICE_PROVIDERS}
               placeholder="Select provider…"
               value={form.serviceProvider} onChange={set('serviceProvider')}
@@ -212,19 +272,19 @@ export default function TransactionForm() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field
-              label="Buy Price (per share)" name="buyPrice" type="number" placeholder="0.00"
+              label="Buy Price (per share)" type="number" placeholder="0.00"
               value={form.buyPrice} onChange={set('buyPrice')}
             />
             <Field
-              label="Buy Amount (total)" name="buyAmount" type="number" placeholder="0.00"
+              label="Buy Amount (total)" type="number" placeholder="0.00"
               value={form.buyAmount} onChange={set('buyAmount')}
             />
             <Field
-              label="Sell Price (per share)" name="sellPrice" type="number" placeholder="0.00"
+              label="Sell Price (per share)" type="number" placeholder="0.00"
               value={form.sellPrice} onChange={set('sellPrice')}
             />
             <Field
-              label="Sell Amount (total)" name="sellAmount" type="number" placeholder="0.00"
+              label="Sell Amount (total)" type="number" placeholder="0.00"
               value={form.sellAmount} onChange={set('sellAmount')}
             />
             <div className="sm:col-span-2">
@@ -245,13 +305,7 @@ export default function TransactionForm() {
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4 uppercase tracking-wide">
             Notes
           </h3>
-          <label className="label">Comments</label>
-          <textarea
-            className="input min-h-[80px] resize-y"
-            placeholder="Optional notes about this trade…"
-            value={form.comments ?? ''}
-            onChange={set('comments')}
-          />
+          <CommentsField value={form.comments} onChange={set('comments')} />
         </div>
 
         <div className="flex gap-3 pt-2">

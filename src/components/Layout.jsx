@@ -5,7 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, List, PlusCircle, Calendar, BarChart2,
   Download, Settings, LogOut, Menu, Sun, Moon, TrendingUp,
-  PieChart, Globe, Newspaper, Calculator, FileText, Zap,
+  PieChart, Globe, Newspaper, Calculator, FileText, Zap, MessageCircle,
 } from 'lucide-react';
 
 const navItems = [
@@ -20,6 +20,7 @@ const navItems = [
   { path: '/avg-cost',     icon: Calculator,      label: 'Avg Cost Calc' },
   { path: '/stock-report', icon: FileText,        label: 'Stock Report' },
   { path: '/token-usage',  icon: Zap,             label: 'Token Usage' },
+  { path: '/xfeed',        icon: MessageCircle,   label: 'X Feed' },
   { path: '/export',       icon: Download,        label: 'Import / Export' },
   { path: '/settings',     icon: Settings,        label: 'Settings' },
 ];

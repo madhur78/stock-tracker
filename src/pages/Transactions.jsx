@@ -8,6 +8,12 @@ import { Search, Plus, Edit2, Trash2, ChevronUp, ChevronDown, ChevronsUpDown } f
 const fmt = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n || 0);
 const PAGE_SIZE = 15;
 
+function holdingDays(buyDate, sellDate) {
+  if (!buyDate || !sellDate) return null;
+  const diff = new Date(sellDate + 'T12:00:00') - new Date(buyDate + 'T12:00:00');
+  return Math.round(diff / 86_400_000);
+}
+
 export default function Transactions() {
   const { transactions, deleteTransaction } = useData();
   const { show } = useNotification();
@@ -64,13 +70,15 @@ export default function Transactions() {
   };
 
   const cols = [
-    { key: 'date', label: 'Date' },
-    { key: 'symbol', label: 'Symbol' },
+    { key: 'buyDate',  label: 'Buy Date' },
+    { key: 'date',     label: 'Sell Date' },
+    { key: '_days',    label: 'Days', noSort: true },
+    { key: 'symbol',   label: 'Symbol' },
     { key: 'optionCount', label: 'Contracts' },
-    { key: 'buyAmount', label: 'Buy Amt' },
+    { key: 'buyAmount',  label: 'Buy Amt' },
     { key: 'sellAmount', label: 'Sell Amt' },
-    { key: 'pl', label: 'P/L' },
-    { key: 'account', label: 'Account' },
+    { key: 'pl',         label: 'P/L' },
+    { key: 'account',    label: 'Account' },
     { key: 'serviceProvider', label: 'Provider' },
   ];
 
@@ -102,8 +110,15 @@ export default function Transactions() {
             <thead>
               <tr className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
                 {cols.map(c => (
-                  <th key={c.key} className="text-left px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide cursor-pointer select-none whitespace-nowrap" onClick={() => setSort2(c.key)}>
-                    <span className="flex items-center gap-1">{c.label} <SortIcon k={c.key} /></span>
+                  <th
+                    key={c.key}
+                    className={`text-left px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap ${c.noSort ? '' : 'cursor-pointer select-none'}`}
+                    onClick={() => !c.noSort && setSort2(c.key)}
+                  >
+                    <span className="flex items-center gap-1">
+                      {c.label}
+                      {!c.noSort && <SortIcon k={c.key} />}
+                    </span>
                   </th>
                 ))}
                 <th className="px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
@@ -112,11 +127,34 @@ export default function Transactions() {
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {current.length === 0 ? (
                 <tr><td colSpan={cols.length + 1} className="px-4 py-12 text-center text-sm text-gray-500 dark:text-gray-400">No transactions found</td></tr>
+
               ) : current.map(t => {
                 const pl = parseFloat(t.pl) || 0;
                 return (
                   <tr key={t.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400 whitespace-nowrap">{t.date}<span className="ml-1 text-xs text-gray-400">{t.day?.slice(0,3)}</span></td>
+                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                      {t.buyDate
+                        ? <>{t.buyDate}<span className="ml-1 text-xs text-gray-400">{t.buyDay?.slice(0,3)}</span></>
+                        : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                      {t.date}<span className="ml-1 text-xs text-gray-400">{t.day?.slice(0,3)}</span>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {(() => {
+                        const d = holdingDays(t.buyDate, t.date);
+                        if (d === null) return <span className="text-gray-300 dark:text-gray-600">—</span>;
+                        return (
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                            d === 0 ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                            : d <= 5 ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                            : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+                          }`}>
+                            {d === 0 ? '0DTE' : `${d}d`}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">{t.symbol}</td>
                     <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{t.optionCount || '—'}</td>
                     <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{fmt(t.buyAmount)}</td>

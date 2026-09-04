@@ -19,6 +19,7 @@ import Settings from './pages/Settings';
 import AvgCostCalculator from './pages/AvgCostCalculator';
 import StockReport from './pages/StockReport';
 import TokenDashboard from './pages/TokenDashboard';
+import XFeed from './pages/XFeed';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -62,6 +63,7 @@ export default function App() {
                 <Route path="/avg-cost" element={<PrivateRoute><AvgCostCalculator /></PrivateRoute>} />
                 <Route path="/stock-report" element={<PrivateRoute><StockReport /></PrivateRoute>} />
                 <Route path="/token-usage" element={<PrivateRoute><TokenDashboard /></PrivateRoute>} />
+                <Route path="/xfeed" element={<PrivateRoute><XFeed /></PrivateRoute>} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </DataProvider>
