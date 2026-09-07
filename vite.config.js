@@ -1101,16 +1101,24 @@ Rules:
 
     try {
       const raw = await readBody(req);
-      const { text, imageBase64, imageMediaType } = JSON.parse(raw);
-      if (!text && !imageBase64) { res.writeHead(400); res.end(JSON.stringify({ error: 'text or imageBase64 required' })); return; }
+      const payload = JSON.parse(raw);
+      // Accept both new { images: [{base64, mediaType}] } and old single-image format for compat
+      const text   = payload.text ?? '';
+      const images = payload.images?.length
+        ? payload.images
+        : payload.imageBase64
+          ? [{ base64: payload.imageBase64, mediaType: payload.imageMediaType ?? 'image/jpeg' }]
+          : [];
+
+      if (!text.trim() && !images.length) { res.writeHead(400); res.end(JSON.stringify({ error: 'text or images required' })); return; }
 
       const userContent = [];
-      if (imageBase64) {
-        userContent.push({ type: 'image', source: { type: 'base64', media_type: imageMediaType || 'image/jpeg', data: imageBase64 } });
+      for (const img of images) {
+        userContent.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType || 'image/jpeg', data: img.base64 } });
       }
-      userContent.push({ type: 'text', text: (text || 'Analyze the image above for financial implications.').slice(0, 10000) });
+      userContent.push({ type: 'text', text: (text || 'Analyze the image(s) above for financial implications.').slice(0, 10000) });
 
-      const model = imageBase64 ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
+      const model = images.length ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
       const aiResp = await nodeRequest('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },

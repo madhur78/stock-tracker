@@ -418,63 +418,91 @@ function AllRecsView({ history, onUpdateStatus }) {
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export default function NewsAnalyzer() {
-  const [tab,       setTab]       = useState('analyze');  // analyze / history / recs
-  const [text,      setText]      = useState('');
-  const [image,     setImage]     = useState(null);       // { base64, mediaType, name, preview }
-  const [loading,   setLoading]   = useState(false);
-  const [error,     setError]     = useState('');
-  const [result,    setResult]    = useState(null);       // live analysis (unsaved or saved copy)
-  const [saved,     setSaved]     = useState(false);
-  const [history,   setHistory]   = useState(load);
-  const [viewEntry, setViewEntry] = useState(null);       // entry opened from history
+  const [tab,         setTab]         = useState('analyze');  // analyze / history / recs
+  const [text,        setText]        = useState('');
+  const [images,      setImages]      = useState([]);         // [{base64, mediaType, name, preview}]
+  const [loadedFiles, setLoadedFiles] = useState([]);         // [{name}] text files appended
+  const [isDragging,  setIsDragging]  = useState(false);
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState('');
+  const [result,      setResult]      = useState(null);
+  const [saved,       setSaved]       = useState(false);
+  const [history,     setHistory]     = useState(load);
+  const [viewEntry,   setViewEntry]   = useState(null);
   const fileRef = useRef();
 
   const persistHistory = useCallback(next => { setHistory(next); save(next); }, []);
 
-  // ── file upload ─────────────────────────────────────────────────────────────
-  const onFile = e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+  // ── process one file ────────────────────────────────────────────────────────
+  const processFile = useCallback(file => {
+    const isText  = file.type.startsWith('text/') || /\.(txt|md|csv)$/i.test(file.name);
+    const isImage = file.type.startsWith('image/');
+    if (isText) {
       const reader = new FileReader();
-      reader.onload = ev => setText(t => t + (t ? '\n\n' : '') + ev.target.result);
+      reader.onload = ev => {
+        setText(t => t + (t ? '\n\n' : '') + ev.target.result);
+        setLoadedFiles(lf => [...lf, { name: file.name }]);
+      };
       reader.readAsText(file);
-    } else if (file.type.startsWith('image/')) {
+    } else if (isImage) {
       const reader = new FileReader();
       reader.onload = ev => {
         const dataUrl = ev.target.result;
-        const base64  = dataUrl.split(',')[1];
-        setImage({ base64, mediaType: file.type, name: file.name, preview: dataUrl });
+        setImages(imgs => [...imgs, {
+          id:        crypto.randomUUID(),
+          base64:    dataUrl.split(',')[1],
+          mediaType: file.type,
+          name:      file.name,
+          preview:   dataUrl,
+        }]);
       };
       reader.readAsDataURL(file);
     } else {
-      setError('Only images and text files are supported. For PDFs, copy-paste the text.');
+      setError(`"${file.name}" is not supported. Use images or text files. For PDFs, copy-paste the text.`);
     }
+  }, []);
+
+  // ── file input change ───────────────────────────────────────────────────────
+  const onFileInput = useCallback(e => {
+    Array.from(e.target.files ?? []).forEach(processFile);
     e.target.value = '';
-  };
+  }, [processFile]);
+
+  // ── drag-and-drop ───────────────────────────────────────────────────────────
+  const onDragOver  = useCallback(e => { e.preventDefault(); setIsDragging(true);  }, []);
+  const onDragLeave = useCallback(e => {
+    if (!e.currentTarget.contains(e.relatedTarget)) setIsDragging(false);
+  }, []);
+  const onDrop = useCallback(e => {
+    e.preventDefault();
+    setIsDragging(false);
+    Array.from(e.dataTransfer.files ?? []).forEach(processFile);
+  }, [processFile]);
+
+  const removeImage = useCallback(id => setImages(imgs => imgs.filter(i => i.id !== id)), []);
+  const removeFile  = useCallback(name => setLoadedFiles(lf => lf.filter(f => f.name !== name)), []);
 
   // ── analyze ─────────────────────────────────────────────────────────────────
   const analyze = async () => {
-    if (!text.trim() && !image) return;
+    if (!text.trim() && !images.length) return;
     setLoading(true); setError(''); setResult(null); setSaved(false);
     try {
-      const body = { text: text.trim() };
-      if (image) { body.imageBase64 = image.base64; body.imageMediaType = image.mediaType; }
-
+      const body = {
+        text:   text.trim(),
+        images: images.map(({ base64, mediaType }) => ({ base64, mediaType })),
+      };
       const res  = await fetch('/api/analyze-news', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
 
       if (data.needsKey) { setError('ANTHROPIC_API_KEY is not set. Add it to your .env file and restart the server.'); return; }
       if (data.error)    { setError(data.error); return; }
 
-      // attach ids and default status to recs
       const stamp = r => ({ ...r, id: crypto.randomUUID(), status: 'watching' });
-      const withIds = {
+      setResult({
         ...data,
         optionRecommendations: (data.optionRecommendations ?? []).map(stamp),
         stockRecommendations:  (data.stockRecommendations  ?? []).map(stamp),
-      };
-      setResult(withIds);
+      });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -485,16 +513,18 @@ export default function NewsAnalyzer() {
   // ── save to history ──────────────────────────────────────────────────────────
   const saveToHistory = useCallback(() => {
     if (!result || saved) return;
+    const names = images.map(i => i.name);
     const entry = {
-      id:        crypto.randomUUID(),
-      createdAt: Date.now(),
-      inputPreview: text.slice(0, 300) || (image ? `[Image: ${image.name}]` : ''),
-      hasImage:  !!image,
+      id:           crypto.randomUUID(),
+      createdAt:    Date.now(),
+      inputPreview: text.slice(0, 300) || (names.length ? `[Images: ${names.join(', ')}]` : ''),
+      hasImage:     images.length > 0,
+      imageCount:   images.length,
       ...result,
     };
     persistHistory([entry, ...history]);
     setSaved(true);
-  }, [result, saved, text, image, history, persistHistory]);
+  }, [result, saved, text, images, history, persistHistory]);
 
   // ── update rec status (live result) ──────────────────────────────────────────
   const updateResultStatus = useCallback((type, recIdOrIdx, status) => {
@@ -525,6 +555,10 @@ export default function NewsAnalyzer() {
       save(next);
       return next;
     });
+  }, []);
+
+  const clearAll = useCallback(() => {
+    setText(''); setImages([]); setLoadedFiles([]); setResult(null); setError(''); setSaved(false);
   }, []);
 
   const deleteEntry = useCallback(id => {
@@ -559,7 +593,24 @@ export default function NewsAnalyzer() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* input */}
           <div className="space-y-4">
-            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-5 space-y-4">
+            <div
+              className={`relative bg-white dark:bg-gray-800 border-2 rounded-xl p-5 space-y-4 transition-colors ${
+                isDragging
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/10'
+                  : 'border-gray-200 dark:border-gray-700'
+              }`}
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              onDrop={onDrop}
+            >
+              {/* drag overlay */}
+              {isDragging && (
+                <div className="absolute inset-0 rounded-xl flex flex-col items-center justify-center z-10 pointer-events-none">
+                  <Upload size={32} className="text-blue-500 mb-2" />
+                  <p className="text-blue-600 dark:text-blue-400 font-semibold text-sm">Drop files to add</p>
+                </div>
+              )}
+
               <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
                 <FileText size={16} /> Input
               </h2>
@@ -568,41 +619,68 @@ export default function NewsAnalyzer() {
                 value={text}
                 onChange={e => setText(e.target.value)}
                 placeholder="Paste news article, earnings report, analyst note, tweet thread, or any financial text here…"
-                rows={12}
+                rows={8}
                 className="w-full text-sm bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700 dark:text-gray-300 placeholder-gray-400"
               />
 
-              {/* image preview */}
-              {image && (
-                <div className="relative inline-block">
-                  <img src={image.preview} alt={image.name} className="h-24 rounded-lg object-cover border border-gray-200 dark:border-gray-700" />
-                  <button
-                    onClick={() => setImage(null)}
-                    className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600"
-                  >
-                    <X size={11} />
-                  </button>
-                  <p className="text-[10px] text-gray-400 mt-0.5 truncate max-w-xs">{image.name}</p>
+              {/* drop zone */}
+              <div
+                onClick={() => fileRef.current?.click()}
+                className="border-2 border-dashed border-gray-200 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500 rounded-lg p-4 text-center cursor-pointer transition-colors group"
+              >
+                <Upload size={18} className="mx-auto mb-1 text-gray-400 group-hover:text-blue-500 transition-colors" />
+                <p className="text-sm text-gray-500 dark:text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                  Drop files here or <span className="font-medium">click to browse</span>
+                </p>
+                <p className="text-[11px] text-gray-400 mt-0.5">Images · .txt · .md · Multiple files supported</p>
+              </div>
+              <input ref={fileRef} type="file" accept="image/*,.txt,.md,.csv" multiple onChange={onFileInput} className="hidden" />
+
+              {/* image thumbnails */}
+              {images.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {images.map(img => (
+                    <div key={img.id} className="relative group">
+                      <img
+                        src={img.preview}
+                        alt={img.name}
+                        title={img.name}
+                        className="h-20 w-20 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+                      />
+                      <button
+                        onClick={() => removeImage(img.id)}
+                        className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-opacity"
+                      >
+                        <X size={10} />
+                      </button>
+                      <p className="text-[9px] text-gray-400 mt-0.5 w-20 truncate text-center">{img.name}</p>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-center h-20 w-20 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg cursor-pointer hover:border-blue-400 transition-colors" onClick={() => fileRef.current?.click()}>
+                    <span className="text-2xl text-gray-300 dark:text-gray-600">+</span>
+                  </div>
                 </div>
               )}
 
-              <div className="flex items-center gap-2">
-                <input ref={fileRef} type="file" accept="image/*,.txt,.md" onChange={onFile} className="hidden" />
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                >
-                  <Upload size={14} /> Upload Image / Text File
-                </button>
-                {(text || image) && (
-                  <button
-                    onClick={() => { setText(''); setImage(null); setResult(null); setError(''); setSaved(false); }}
-                    className="text-xs text-gray-400 hover:text-red-500 transition-colors"
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
+              {/* loaded text files */}
+              {loadedFiles.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {loadedFiles.map(f => (
+                    <span key={f.name} className="inline-flex items-center gap-1 px-2 py-1 text-[11px] bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800 rounded-full">
+                      📄 {f.name}
+                      <button onClick={() => removeFile(f.name)} className="ml-0.5 hover:text-red-500 transition-colors">
+                        <X size={9} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {(images.length > 0 || loadedFiles.length > 0) && (
+                <p className="text-[10px] text-gray-400">
+                  {[images.length > 0 && `${images.length} image${images.length > 1 ? 's' : ''}`, loadedFiles.length > 0 && `${loadedFiles.length} text file${loadedFiles.length > 1 ? 's' : ''} loaded`].filter(Boolean).join(' · ')}
+                </p>
+              )}
 
               {error && (
                 <div className="flex gap-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-600 dark:text-red-400">
@@ -611,17 +689,24 @@ export default function NewsAnalyzer() {
                 </div>
               )}
 
-              <button
-                onClick={analyze}
-                disabled={loading || (!text.trim() && !image)}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <><RefreshCw size={16} className="animate-spin" /> Analyzing…</>
-                ) : (
-                  <><Lightbulb size={16} /> Analyze</>
+              <div className="flex gap-2">
+                <button
+                  onClick={analyze}
+                  disabled={loading || (!text.trim() && !images.length)}
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  {loading ? (
+                    <><RefreshCw size={16} className="animate-spin" /> Analyzing…</>
+                  ) : (
+                    <><Lightbulb size={16} /> Analyze</>
+                  )}
+                </button>
+                {(text || images.length > 0 || loadedFiles.length > 0) && (
+                  <button onClick={clearAll} className="px-3 py-2.5 text-sm text-gray-400 hover:text-red-500 border border-gray-200 dark:border-gray-700 rounded-lg hover:border-red-300 transition-colors" title="Clear all">
+                    <X size={16} />
+                  </button>
                 )}
-              </button>
+              </div>
 
               <div className="text-[11px] text-gray-400 space-y-1">
                 <p className="font-medium text-gray-500 dark:text-gray-400">Ideas for input:</p>
