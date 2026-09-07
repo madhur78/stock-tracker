@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { DataProvider } from './contexts/DataContext';
+import { TradeProvider } from './contexts/TradeContext';
+import TradeBook from './pages/TradeBook';
 import { NotificationProvider } from './components/Notification';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -20,6 +22,7 @@ import AvgCostCalculator from './pages/AvgCostCalculator';
 import StockReport from './pages/StockReport';
 import TokenDashboard from './pages/TokenDashboard';
 import XFeed from './pages/XFeed';
+import NewsAnalyzer from './pages/NewsAnalyzer';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -46,6 +49,7 @@ export default function App() {
         <AuthProvider>
           <NotificationProvider>
             <DataProvider>
+              <TradeProvider>
               <Routes>
                 <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
                 <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
@@ -63,9 +67,12 @@ export default function App() {
                 <Route path="/avg-cost" element={<PrivateRoute><AvgCostCalculator /></PrivateRoute>} />
                 <Route path="/stock-report" element={<PrivateRoute><StockReport /></PrivateRoute>} />
                 <Route path="/token-usage" element={<PrivateRoute><TokenDashboard /></PrivateRoute>} />
-                <Route path="/xfeed" element={<PrivateRoute><XFeed /></PrivateRoute>} />
+                <Route path="/xfeed"      element={<PrivateRoute><XFeed /></PrivateRoute>} />
+                <Route path="/trade-book"      element={<PrivateRoute><TradeBook /></PrivateRoute>} />
+                <Route path="/news-analyzer"  element={<PrivateRoute><NewsAnalyzer /></PrivateRoute>} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
+              </TradeProvider>
             </DataProvider>
           </NotificationProvider>
         </AuthProvider>

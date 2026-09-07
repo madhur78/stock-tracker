@@ -1020,8 +1020,147 @@ function xFeedPlugin() {
   };
 }
 
+// ─── News Analyzer plugin ─────────────────────────────────────────────────────
+//
+// Endpoint:
+//   POST /api/analyze-news
+//   Body JSON: { text?, imageBase64?, imageMediaType? }
+//   → structured financial analysis JSON
+//
+// Requires ANTHROPIC_API_KEY. Without it returns { needsKey: true }.
+
+function newsAnalyzerPlugin() {
+  const SYSTEM_PROMPT = `You are an expert financial analyst specializing in stocks and options trading. Analyze the provided news/content and return a comprehensive JSON analysis.
+
+Return ONLY a valid JSON object with this exact structure (no other text, no markdown):
+{
+  "summary": "2-3 sentence executive summary",
+  "takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
+  "sentiment": {
+    "label": "Bullish",
+    "score": 72,
+    "reasoning": "one sentence explaining the score"
+  },
+  "tickers": ["AAPL","NVDA"],
+  "category": "Earnings",
+  "timeHorizon": "Short-term (1-5 days)",
+  "optionRecommendations": [
+    {
+      "action": "Buy Call",
+      "ticker": "AAPL",
+      "reasoning": "concise trade rationale",
+      "risk": "Medium",
+      "confidence": 65,
+      "targetExpiry": "This Week",
+      "targetStrike": "Slight OTM"
+    }
+  ],
+  "stockRecommendations": [
+    {
+      "action": "Buy",
+      "ticker": "AAPL",
+      "reasoning": "concise rationale",
+      "risk": "Low",
+      "confidence": 70,
+      "targetPrice": "above current levels",
+      "stopLoss": "5% below entry"
+    }
+  ]
+}
+
+Rules:
+- sentiment.label: "Bullish" | "Bearish" | "Neutral" | "Mixed"
+- sentiment.score: 0 (very bearish) to 100 (very bullish), 50 = neutral
+- category: "Earnings" | "Fed/Macro" | "Sector News" | "Technical" | "M&A" | "Political" | "Geopolitical" | "Product Launch" | "Analyst Note" | "Other"
+- timeHorizon: "Same Day (0DTE)" | "Short-term (1-5 days)" | "Weekly" | "Monthly" | "Long-term"
+- action (options): "Buy Call" | "Buy Put" | "Sell Call" | "Sell Put" | "Straddle" | "Strangle"
+- action (stocks): "Buy" | "Sell" | "Short" | "Hold" | "Watch"
+- risk: "Low" | "Medium" | "High" | "Extreme"
+- targetExpiry: "Same Day" | "This Week" | "Next Week" | "Monthly"
+- targetStrike: "ATM" | "Slight OTM" | "Deep OTM" | "ITM"
+- takeaways: 3-5 items; optionRecommendations/stockRecommendations: 0-3 each (empty array if unclear)
+- confidence: 0-100 (your confidence in THIS specific recommendation)`;
+
+  function readBody(req) {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => resolve(body));
+      req.on('error', reject);
+    });
+  }
+
+  async function analyzeHandler(req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    if (req.method !== 'POST') { res.writeHead(405); res.end(JSON.stringify({ error: 'POST required' })); return; }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { res.writeHead(200); res.end(JSON.stringify({ needsKey: true })); return; }
+
+    try {
+      const raw = await readBody(req);
+      const { text, imageBase64, imageMediaType } = JSON.parse(raw);
+      if (!text && !imageBase64) { res.writeHead(400); res.end(JSON.stringify({ error: 'text or imageBase64 required' })); return; }
+
+      const userContent = [];
+      if (imageBase64) {
+        userContent.push({ type: 'image', source: { type: 'base64', media_type: imageMediaType || 'image/jpeg', data: imageBase64 } });
+      }
+      userContent.push({ type: 'text', text: (text || 'Analyze the image above for financial implications.').slice(0, 10000) });
+
+      const model = imageBase64 ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
+      const aiResp = await nodeRequest('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model, max_tokens: 2000, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userContent }] }),
+      });
+
+      if (aiResp.status !== 200) {
+        const err = (() => { try { return JSON.parse(aiResp.body); } catch { return {}; } })();
+        res.writeHead(aiResp.status);
+        res.end(JSON.stringify({ error: err.error?.message ?? `API error ${aiResp.status}` }));
+        return;
+      }
+
+      const parsed = JSON.parse(aiResp.body);
+      if (parsed.usage) logClaudeCall({ symbol: 'news-analyzer', model, inputTokens: parsed.usage.input_tokens, outputTokens: parsed.usage.output_tokens });
+
+      const txt = parsed.content?.[0]?.text ?? '';
+      const match = txt.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('Claude did not return valid JSON');
+      const analysis = JSON.parse(match[0]);
+
+      console.log(`[news-analyzer] analyzed — ${analysis.sentiment?.label} (${analysis.sentiment?.score}) tickers=${(analysis.tickers||[]).join(',') || 'none'}`);
+      res.writeHead(200);
+      res.end(JSON.stringify(analysis));
+    } catch (err) {
+      console.error('[news-analyzer]', err.message);
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  function addMiddleware(server) {
+    server.middlewares.use((req, res, next) => {
+      if (req.url?.startsWith('/api/analyze-news')) return analyzeHandler(req, res);
+      next();
+    });
+    server.httpServer?.once('listening', () => {
+      console.log(`[news-analyzer] ✓ News Analyzer plugin ready (AI: ${process.env.ANTHROPIC_API_KEY ? 'enabled' : 'disabled — set ANTHROPIC_API_KEY to enable'})\n`);
+    });
+  }
+
+  return {
+    name: 'news-analyzer-proxy',
+    configureServer(server)        { addMiddleware(server); },
+    configurePreviewServer(server) { addMiddleware(server); },
+  };
+}
+
 // ─── Vite config ───────────────────────────────────────────────────────────────
 
 export default defineConfig({
-  plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin(), xFeedPlugin()],
+  plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin(), xFeedPlugin(), newsAnalyzerPlugin()],
 });
