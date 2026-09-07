@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import https from 'https';
 import http from 'http';
@@ -1169,6 +1169,15 @@ Rules:
 
 // ─── Vite config ───────────────────────────────────────────────────────────────
 
-export default defineConfig({
-  plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin(), xFeedPlugin(), newsAnalyzerPlugin()],
+export default defineConfig(({ mode }) => {
+  // Vite's loadEnv reads .env files but doesn't populate process.env for server
+  // plugin code. Explicitly bridge the gap so all API keys are available in
+  // configureServer middleware at request time.
+  const env = loadEnv(mode, process.cwd(), '');
+  process.env.ANTHROPIC_API_KEY    ??= env.ANTHROPIC_API_KEY;
+  process.env.TWITTER_BEARER_TOKEN ??= env.TWITTER_BEARER_TOKEN;
+
+  return {
+    plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin(), xFeedPlugin(), newsAnalyzerPlugin()],
+  };
 });
