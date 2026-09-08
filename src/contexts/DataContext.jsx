@@ -30,25 +30,39 @@ export function DataProvider({ children }) {
   }, [user]);
 
   const addTransaction = useCallback((tx) => {
+    // Use a random suffix so rapid closes (same ms) never collide on ID
     const newTx = {
       ...tx,
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       createdAt: new Date().toISOString(),
     };
-    const updated = [newTx, ...transactions];
-    save(updated);
+    // Functional update: `prev` is always the latest state, even when multiple
+    // addTransaction calls are batched in the same render (e.g. migration loop,
+    // or closing several trades quickly). Without this, each call reads the same
+    // stale snapshot of `transactions` and only the last write survives.
+    setTransactions(prev => {
+      const updated = [newTx, ...prev];
+      if (user) localStorage.setItem(getStorageKey(user.id), JSON.stringify(updated));
+      return updated;
+    });
     return newTx;
-  }, [transactions, save]);
+  }, [user]);
 
   const updateTransaction = useCallback((id, tx) => {
-    const updated = transactions.map(t => t.id === id ? { ...t, ...tx, updatedAt: new Date().toISOString() } : t);
-    save(updated);
-  }, [transactions, save]);
+    setTransactions(prev => {
+      const updated = prev.map(t => t.id === id ? { ...t, ...tx, updatedAt: new Date().toISOString() } : t);
+      if (user) localStorage.setItem(getStorageKey(user.id), JSON.stringify(updated));
+      return updated;
+    });
+  }, [user]);
 
   const deleteTransaction = useCallback((id) => {
-    const updated = transactions.filter(t => t.id !== id);
-    save(updated);
-  }, [transactions, save]);
+    setTransactions(prev => {
+      const updated = prev.filter(t => t.id !== id);
+      if (user) localStorage.setItem(getStorageKey(user.id), JSON.stringify(updated));
+      return updated;
+    });
+  }, [user]);
 
   const getByDate = useCallback((date) => {
     return transactions.filter(t => t.date === date);
@@ -65,13 +79,16 @@ export function DataProvider({ children }) {
     const now = new Date().toISOString();
     const newTxs = txList.map((tx, i) => ({
       ...tx,
-      id: (Date.now() + i).toString(),
+      id: `${Date.now() + i}-${Math.random().toString(36).slice(2, 7)}`,
       createdAt: now,
     }));
-    const updated = mode === 'replace' ? newTxs : [...newTxs, ...transactions];
-    save(updated);
+    setTransactions(prev => {
+      const updated = mode === 'replace' ? newTxs : [...newTxs, ...prev];
+      if (user) localStorage.setItem(getStorageKey(user.id), JSON.stringify(updated));
+      return updated;
+    });
     return newTxs.length;
-  }, [transactions, save]);
+  }, [user]);
 
   return (
     <DataContext.Provider value={{ transactions, addTransaction, updateTransaction, deleteTransaction, getByDate, summary, bulkImport }}>

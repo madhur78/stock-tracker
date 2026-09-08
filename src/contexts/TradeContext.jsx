@@ -48,23 +48,31 @@ export function TradeProvider({ children }) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   };
 
-  // One-time migration: sync any closed trades that existed before this bridge was added.
-  // Depends on `transactions` so it re-runs after DataContext finishes loading from
-  // localStorage (DataContext loads async on user change).
+  // Sync any closed trades missing from DataContext.
+  // Runs after DataContext loads (depends on `transactions`).
+  // Catches two cases:
+  //   1. Trade has no dataTxId (pre-dates the bridge feature)
+  //   2. Trade has a dataTxId but it's gone from DataContext (lost to the
+  //      stale-closure bug that existed before the functional-update fix)
   useEffect(() => {
     if (!user || migrated.current) return;
-    const unsynced = trades.filter(t => t.status === 'closed' && !t.dataTxId);
+    const txIds = new Set(transactions.map(tx => tx.id));
+    const unsynced = trades.filter(t =>
+      t.status === 'closed' && (!t.dataTxId || !txIds.has(t.dataTxId))
+    );
     if (!unsynced.length) { migrated.current = true; return; }
     migrated.current = true;
 
     let next = [...trades];
     for (const trade of unsynced) {
-      // Avoid duplicating a trade that was already synced in a previous session
+      // Check if DataContext already has this trade (by tradeBookId) to avoid duplication
       const existing = transactions.find(tx => tx.tradeBookId === trade.id);
       if (existing) {
         next = next.map(t => t.id === trade.id ? { ...t, dataTxId: existing.id } : t);
       } else {
         const dataTx = addTransaction(toDataTx(trade));
+        // dataTx.id is set synchronously; addTransaction uses functional state
+        // update so all loop iterations stack correctly without stale closure.
         next = next.map(t => t.id === trade.id ? { ...t, dataTxId: dataTx.id } : t);
       }
     }
