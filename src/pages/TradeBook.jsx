@@ -379,6 +379,154 @@ function OpenCard({ trade, onClose, onEdit, onDelete }) {
   );
 }
 
+// ─── Edit Closed Trade form ───────────────────────────────────────────────────
+
+function EditClosedTradeModal({ trade, onSubmit, onClose }) {
+  const [f, setF] = useState({
+    symbol:          trade.symbol          || '',
+    tradeType:       trade.tradeType       || 'Option',
+    optionCount:     String(trade.optionCount || '1'),
+    buyDate:         trade.buyDate         || today(),
+    buyPrice:        String(trade.buyPrice  || ''),
+    buyAmount:       String(trade.buyAmount || ''),
+    sellDate:        trade.sellDate        || today(),
+    sellPrice:       String(trade.sellPrice || ''),
+    sellAmount:      String(trade.sellAmount|| ''),
+    account:         trade.account         || '',
+    serviceProvider: trade.serviceProvider || '',
+    comments:        trade.comments        || '',
+  });
+
+  const set = (k) => (e) => {
+    const v = typeof e === 'string' ? e : e.target.value;
+    setF(prev => {
+      const next = { ...prev, [k]: v };
+      if (['buyPrice','optionCount','tradeType'].includes(k)) {
+        const p = k === 'buyPrice'    ? v : next.buyPrice;
+        const c = k === 'optionCount' ? v : next.optionCount;
+        const t = k === 'tradeType'   ? v : next.tradeType;
+        next.buyAmount = calcBuyAmount(p, c, t);
+      }
+      if (k === 'sellPrice') next.sellAmount = calcBuyAmount(v, next.optionCount, next.tradeType);
+      return next;
+    });
+  };
+
+  const buyAmt  = parseFloat(f.buyAmount)  || 0;
+  const sellAmt = parseFloat(f.sellAmount) || 0;
+  const pl      = sellAmt - buyAmt;
+  const plPct   = buyAmt ? (pl / buyAmt) * 100 : 0;
+  const hd      = days(f.buyDate, f.sellDate);
+  const valid   = f.symbol.trim() && f.buyDate && f.sellDate;
+
+  const submit = () => {
+    if (!valid) return;
+    onSubmit({
+      symbol:          f.symbol.trim().toUpperCase(),
+      tradeType:       f.tradeType,
+      optionCount:     f.optionCount,
+      buyDate:         f.buyDate,
+      buyDay:          dayOf(f.buyDate),
+      buyPrice:        parseFloat(f.buyPrice)  || 0,
+      buyAmount:       parseFloat(f.buyAmount) || 0,
+      sellDate:        f.sellDate,
+      sellDay:         dayOf(f.sellDate),
+      sellPrice:       parseFloat(f.sellPrice)  || 0,
+      sellAmount:      sellAmt,
+      pl:              parseFloat(pl.toFixed(2)),
+      plPct:           parseFloat(plPct.toFixed(2)),
+      holdDays:        hd,
+      account:         f.account,
+      serviceProvider: f.serviceProvider,
+      comments:        f.comments,
+    });
+    onClose();
+  };
+
+  return (
+    <Modal title={`Edit Closed Trade — ${trade.symbol}`}
+      subtitle={`${trade.tradeType} · ${trade.optionCount} ${trade.tradeType === 'Stock' ? 'shares' : 'contracts'}`}
+      onClose={onClose} wide>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <Label>Symbol *</Label>
+          <input className="input text-sm uppercase" placeholder="AAPL" value={f.symbol}
+            onChange={e => set('symbol')({ target: { value: e.target.value.toUpperCase() } })} />
+        </div>
+        <Select label="Trade Type" options={TRADE_TYPES} value={f.tradeType} onChange={set('tradeType')} />
+        <Input label={f.tradeType === 'Stock' ? 'Share Count' : 'Contracts'} type="number" placeholder="1"
+          value={f.optionCount} onChange={set('optionCount')} />
+        <Select label="Account" options={ACCOUNTS} value={f.account} onChange={set('account')} />
+
+        <div className="col-span-2 border-t border-gray-100 dark:border-gray-700 pt-3">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Buy Details</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Buy Date *</Label>
+              <input type="date" className="input text-sm" value={f.buyDate} onChange={set('buyDate')} />
+            </div>
+            <Input label="Buy Day" value={dayOf(f.buyDate)} readOnly />
+            <Input label="Buy Price (per unit)" type="number" placeholder="0.00"
+              value={f.buyPrice} onChange={set('buyPrice')} />
+            <Input label={`Buy Amount (total${f.tradeType === 'Option' ? ' × 100' : ''})`} type="number"
+              placeholder="Auto" value={f.buyAmount} onChange={set('buyAmount')} />
+          </div>
+        </div>
+
+        <div className="col-span-2 border-t border-gray-100 dark:border-gray-700 pt-3">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Sell Details</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Sell Date *</Label>
+              <input type="date" className="input text-sm" value={f.sellDate} onChange={set('sellDate')} />
+            </div>
+            <Input label="Sell Day" value={dayOf(f.sellDate)} readOnly />
+            <Input label="Sell Price (per unit)" type="number" placeholder="0.00"
+              value={f.sellPrice} onChange={set('sellPrice')} />
+            <Input label={`Sell Amount (total${f.tradeType === 'Option' ? ' × 100' : ''})`} type="number"
+              placeholder="Auto" value={f.sellAmount} onChange={set('sellAmount')} />
+          </div>
+        </div>
+
+        <div className="col-span-2">
+          <Select label="Service Provider" options={PROVIDERS} value={f.serviceProvider} onChange={set('serviceProvider')} />
+        </div>
+      </div>
+
+      {(buyAmt > 0 || sellAmt > 0) && (
+        <div className={`rounded-xl p-4 border-2 ${pl >= 0 ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'}`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {pl >= 0 ? <TrendingUp size={16} className="text-green-600" /> : <TrendingDown size={16} className="text-red-500" />}
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">P/L Preview</span>
+            </div>
+            <div className="text-right">
+              <p className={`text-xl font-bold ${pl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                {pl >= 0 ? '+' : ''}{curr(pl)}
+              </p>
+              <p className={`text-xs ${pl >= 0 ? 'text-green-500' : 'text-red-400'}`}>
+                {pl >= 0 ? '+' : ''}{plPct.toFixed(1)}%
+                {hd !== null && ` · ${hd === 0 ? '0DTE' : `${hd}d`}`}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <TagChips value={f.comments} onChange={v => setF(p => ({ ...p, comments: v }))} />
+
+      <div className="flex gap-3 pt-1">
+        <button onClick={submit} disabled={!valid}
+          className="btn-primary flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
+          <Save size={15} /> Save Changes
+        </button>
+        <button onClick={onClose} className="btn-secondary">Cancel</button>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Closed trades table ──────────────────────────────────────────────────────
 
 function DaysBadge({ d }) {
@@ -394,8 +542,9 @@ function DaysBadge({ d }) {
   );
 }
 
-function ClosedTable({ trades }) {
-  const [sort, setSort] = useState({ key: 'sellDate', dir: 'desc' });
+function ClosedTable({ trades, onEdit, onDelete }) {
+  const [sort,      setSort]      = useState({ key: 'sellDate', dir: 'desc' });
+  const [confirmId, setConfirmId] = useState(null);
 
   const sorted = useMemo(() => [...trades].sort((a, b) => {
     let av = a[sort.key] ?? 0, bv = b[sort.key] ?? 0;
@@ -403,18 +552,18 @@ function ClosedTable({ trades }) {
   }), [trades, sort]);
 
   const toggle = (key) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' });
-  const Icon = ({ k }) => sort.key !== k ? null : sort.dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
+  const SortIcon = ({ k }) => sort.key !== k ? null : sort.dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
 
   const cols = [
-    { key: 'symbol',    label: 'Symbol' },
-    { key: 'buyDate',   label: 'Buy Date' },
-    { key: 'sellDate',  label: 'Sell Date' },
-    { key: 'holdDays',  label: 'Days' },
-    { key: 'optionCount', label: 'Qty' },
-    { key: 'buyAmount', label: 'Buy Amt' },
-    { key: 'sellAmount',label: 'Sell Amt' },
-    { key: 'pl',        label: 'P/L' },
-    { key: 'plPct',     label: 'P/L %' },
+    { key: 'symbol',     label: 'Symbol'   },
+    { key: 'buyDate',    label: 'Buy Date' },
+    { key: 'sellDate',   label: 'Sell Date'},
+    { key: 'holdDays',   label: 'Days'     },
+    { key: 'optionCount',label: 'Qty'      },
+    { key: 'buyAmount',  label: 'Buy Amt'  },
+    { key: 'sellAmount', label: 'Sell Amt' },
+    { key: 'pl',         label: 'P/L'      },
+    { key: 'plPct',      label: 'P/L %'    },
   ];
 
   if (!trades.length) return (
@@ -433,10 +582,11 @@ function ClosedTable({ trades }) {
               {cols.map(c => (
                 <th key={c.key} onClick={() => toggle(c.key)}
                   className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide cursor-pointer select-none whitespace-nowrap">
-                  <span className="inline-flex items-center gap-1">{c.label} <Icon k={c.key} /></span>
+                  <span className="inline-flex items-center gap-1">{c.label} <SortIcon k={c.key} /></span>
                 </th>
               ))}
               <th className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Notes</th>
+              <th className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
@@ -466,6 +616,28 @@ function ClosedTable({ trades }) {
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-400 max-w-[160px] truncate" title={t.comments}>
                     {t.comments || '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    {confirmId === t.id ? (
+                      <div className="flex items-center gap-1.5 bg-red-50 dark:bg-red-900/30 px-2 py-1.5 rounded-lg border border-red-200 dark:border-red-800 whitespace-nowrap">
+                        <span className="text-xs text-red-600 dark:text-red-400 font-medium">Delete?</span>
+                        <button onClick={() => { onDelete(t.id); setConfirmId(null); }}
+                          className="text-xs font-semibold text-red-600 hover:text-red-700 dark:text-red-400 px-1">Yes</button>
+                        <button onClick={() => setConfirmId(null)}
+                          className="text-xs text-gray-500 hover:text-gray-700 px-1">No</button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => onEdit(t)} title="Edit"
+                          className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                          <Edit2 size={14} />
+                        </button>
+                        <button onClick={() => setConfirmId(t.id)} title="Delete"
+                          className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
@@ -518,9 +690,10 @@ function StatsBar({ trades }) {
 export default function TradeBook() {
   const { trades, openTrade, closeTrade, updateTrade, deleteTrade } = useTrades();
 
-  const [showOpen,    setShowOpen]    = useState(false);
-  const [closingTrade, setClosingTrade] = useState(null);
-  const [editingTrade, setEditingTrade] = useState(null);
+  const [showOpen,          setShowOpen]          = useState(false);
+  const [closingTrade,      setClosingTrade]      = useState(null);
+  const [editingTrade,      setEditingTrade]      = useState(null);   // open trade edit
+  const [editingClosedTrade,setEditingClosedTrade]= useState(null);   // closed trade edit
   const [tab, setTab] = useState('open');
 
   const openTrades   = useMemo(() => trades.filter(t => t.status === 'open'),   [trades]);
@@ -606,7 +779,13 @@ export default function TradeBook() {
       )}
 
       {/* Closed trades */}
-      {tab === 'closed' && <ClosedTable trades={closedTrades} />}
+      {tab === 'closed' && (
+        <ClosedTable
+          trades={closedTrades}
+          onEdit={setEditingClosedTrade}
+          onDelete={deleteTrade}
+        />
+      )}
 
       {/* Modals */}
       {showOpen && (
@@ -620,6 +799,13 @@ export default function TradeBook() {
           trade={closingTrade}
           onSubmit={(data) => { closeTrade(closingTrade.id, data); setClosingTrade(null); }}
           onClose={() => setClosingTrade(null)}
+        />
+      )}
+      {editingClosedTrade && (
+        <EditClosedTradeModal
+          trade={editingClosedTrade}
+          onSubmit={(data) => { updateTrade(editingClosedTrade.id, data); setEditingClosedTrade(null); }}
+          onClose={() => setEditingClosedTrade(null)}
         />
       )}
     </div>
