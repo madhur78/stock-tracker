@@ -35,7 +35,7 @@ function toDataTx(trade) {
 
 export function TradeProvider({ children }) {
   const { user } = useAuth();
-  const { addTransaction, updateTransaction, deleteTransaction, transactions } = useData();
+  const { addTransaction, updateTransaction, deleteTransaction, transactions, loaded } = useData();
   const migrated = useRef(false);
 
   const [trades, setTrades] = useState(() => {
@@ -54,8 +54,11 @@ export function TradeProvider({ children }) {
   //   1. Trade has no dataTxId (pre-dates the bridge feature)
   //   2. Trade has a dataTxId but it's gone from DataContext (lost to the
   //      stale-closure bug that existed before the functional-update fix)
+  // Reset migration guard whenever user changes so it runs once per login
+  useEffect(() => { migrated.current = false; }, [user]);
+
   useEffect(() => {
-    if (!user || migrated.current) return;
+    if (!user || !loaded || migrated.current) return;
     const txIds = new Set(transactions.map(tx => tx.id));
     const unsynced = trades.filter(t =>
       t.status === 'closed' && (!t.dataTxId || !txIds.has(t.dataTxId))
@@ -78,7 +81,7 @@ export function TradeProvider({ children }) {
     }
     setTrades(next);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }, [user, transactions]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user, loaded, transactions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Open a new position — stays only in Trade Book until closed
   const openTrade = data =>

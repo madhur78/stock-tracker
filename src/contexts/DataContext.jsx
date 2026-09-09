@@ -8,8 +8,10 @@ const getStorageKey = (userId) => `stocktracker_transactions_${userId}`;
 export function DataProvider({ children }) {
   const { user } = useAuth();
   const [transactions, setTransactions] = useState([]);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    setLoaded(false);
     if (user) {
       const key = getStorageKey(user.id);
       try {
@@ -21,6 +23,7 @@ export function DataProvider({ children }) {
     } else {
       setTransactions([]);
     }
+    setLoaded(true);
   }, [user]);
 
   const save = useCallback((data) => {
@@ -91,7 +94,7 @@ export function DataProvider({ children }) {
   }, [user]);
 
   return (
-    <DataContext.Provider value={{ transactions, addTransaction, updateTransaction, deleteTransaction, getByDate, summary, bulkImport }}>
+    <DataContext.Provider value={{ transactions, loaded, addTransaction, updateTransaction, deleteTransaction, getByDate, summary, bulkImport }}>
       {children}
     </DataContext.Provider>
   );
