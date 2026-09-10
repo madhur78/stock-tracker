@@ -12,19 +12,29 @@ export default function DailyView() {
   const initDate = location.state?.date || format(new Date(), 'yyyy-MM-dd');
   const [selectedDate, setSelectedDate] = useState(initDate);
 
+  const WEEKEND = new Set([0, 6]); // Sunday, Saturday
+
   const days = useMemo(() => {
     const map = {};
     transactions.forEach(t => {
-      if (!map[t.date]) map[t.date] = { count: 0, pl: 0 };
-      map[t.date].count++;
-      map[t.date].pl += parseFloat(t.pl) || 0;
+      const d = t.date; // sell date
+      if (!d) return;
+      // Skip transactions whose sell date falls on a weekend — markets are closed
+      const dow = new Date(d + 'T12:00:00').getDay();
+      if (WEEKEND.has(dow)) return;
+      if (!map[d]) map[d] = { count: 0, pl: 0 };
+      map[d].count++;
+      map[d].pl += parseFloat(t.pl) || 0;
     });
     return map;
   }, [transactions]);
 
   const sortedDays = useMemo(() => Object.keys(days).sort((a, b) => b.localeCompare(a)), [days]);
 
-  const dayTx = useMemo(() => transactions.filter(t => t.date === selectedDate), [transactions, selectedDate]);
+  const dayTx = useMemo(
+    () => transactions.filter(t => t.date === selectedDate && t.date),
+    [transactions, selectedDate],
+  );
 
   const dayStats = useMemo(() => ({
     count: dayTx.length,
@@ -43,7 +53,7 @@ export default function DailyView() {
     <div className="space-y-5">
       <div>
         <h2 className="text-xl font-bold text-gray-900 dark:text-white">Daily View</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400">Browse transactions by day</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">Closed trades grouped by sell date (weekdays only)</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -116,7 +126,7 @@ export default function DailyView() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-800/50">
-                      {['Symbol', 'Contracts', 'Buy Amt', 'Sell Amt', 'P/L', 'Account', ''].map(h => (
+                      {['Symbol', 'Buy Date', 'Contracts', 'Buy Amt', 'Sell Amt', 'P/L', 'Account', ''].map(h => (
                         <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
@@ -127,6 +137,11 @@ export default function DailyView() {
                       return (
                         <tr key={t.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                           <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">{t.symbol}</td>
+                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">
+                            {t.buyDate
+                              ? <>{t.buyDate}<span className="ml-1 opacity-60">{t.buyDay?.slice(0,3)}</span></>
+                              : '—'}
+                          </td>
                           <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{t.optionCount || '—'}</td>
                           <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{fmt(t.buyAmount)}</td>
                           <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{fmt(t.sellAmount)}</td>
