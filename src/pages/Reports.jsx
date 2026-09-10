@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, Award, Target, ChevronDown, ChevronUp,
-  Calendar, Tag, Briefcase, Cpu, MessageSquare, Filter, Search, X,
+  Calendar, Tag, Briefcase, Cpu, MessageSquare, Filter, Search, X, Layers,
 } from 'lucide-react';
 import {
   format, parseISO, startOfWeek, endOfWeek, addDays,
@@ -452,6 +452,7 @@ function CommentsReport({ transactions }) {
 
 const TABS = [
   { id: 'weekly',   label: 'Weekly',         icon: Calendar },
+  { id: 'type',     label: 'By Type',         icon: Layers },
   { id: 'symbol',   label: 'By Symbol',       icon: Tag },
   { id: 'account',  label: 'By Account',      icon: Briefcase },
   { id: 'provider', label: 'By Provider',     icon: Cpu },
@@ -460,6 +461,7 @@ const TABS = [
 
 const GROUP_KEY_FN = {
   weekly:   t => weekKey(t.date),
+  type:     t => t.tradeType?.trim() || 'Option',
   symbol:   t => (t.symbol || '').toUpperCase().trim() || '(No Symbol)',
   account:  t => t.account?.trim()          || '(No Account)',
   provider: t => t.serviceProvider?.trim()  || '(No Provider)',
@@ -470,14 +472,16 @@ export default function Reports() {
   const [activeTab, setActiveTab] = useState('weekly');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo]     = useState('');
+  const [tradeType, setTradeType] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
 
   const filtered = useMemo(() => {
     let r = transactions;
-    if (dateFrom) r = r.filter(t => t.date >= dateFrom);
-    if (dateTo)   r = r.filter(t => t.date <= dateTo);
+    if (dateFrom)   r = r.filter(t => t.date >= dateFrom);
+    if (dateTo)     r = r.filter(t => t.date <= dateTo);
+    if (tradeType)  r = r.filter(t => (t.tradeType || 'Option') === tradeType);
     return r;
-  }, [transactions, dateFrom, dateTo]);
+  }, [transactions, dateFrom, dateTo, tradeType]);
 
   const groups = useMemo(() => {
     if (activeTab === 'comments') return [];
@@ -500,23 +504,42 @@ export default function Reports() {
         <div>
           <h2 className="text-xl font-bold text-gray-900 dark:text-white">Reports</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Analyse performance by week, symbol, account, provider and comments
+            Analyse performance by type, week, symbol, account, provider and comments
           </p>
         </div>
 
-        {/* Date filter toggle */}
-        <button
-          onClick={() => setFilterOpen(o => !o)}
-          className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg border transition-colors ${
-            (dateFrom || dateTo)
-              ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400'
-              : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
-          }`}
-        >
-          <Filter size={15} />
-          {dateFrom || dateTo ? 'Filter active' : 'Date filter'}
-          {filterOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Trade type pills */}
+          <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
+            {['', 'Option', 'Stock'].map(t => (
+              <button
+                key={t || 'all'}
+                onClick={() => setTradeType(t)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
+                  tradeType === t
+                    ? 'bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+              >
+                {t || 'All Types'}
+              </button>
+            ))}
+          </div>
+
+          {/* Date filter toggle */}
+          <button
+            onClick={() => setFilterOpen(o => !o)}
+            className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg border transition-colors ${
+              (dateFrom || dateTo)
+                ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400'
+                : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+            }`}
+          >
+            <Filter size={15} />
+            {dateFrom || dateTo ? 'Filter active' : 'Date filter'}
+            {filterOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        </div>
       </div>
 
       {/* Date range filter */}
