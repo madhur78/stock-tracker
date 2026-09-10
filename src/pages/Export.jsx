@@ -9,12 +9,15 @@ const fmt = (n) => `$${parseFloat(n || 0).toFixed(2)}`;
 
 // Flexible header → transaction field mapping
 const HEADER_ALIASES = {
-  date:            ['date', 'trade date', 'tradedate', 'trade_date'],
-  day:             ['day'],
   symbol:          ['symbol', 'stock symbol', 'ticker', 'stock'],
+  tradeType:       ['trade type', 'tradetype', 'trade_type', 'type', 'option/stock'],
   optionCount:     ['contracts', 'option count', 'optioncount', 'qty', 'quantity', 'count', 'options'],
+  buyDate:         ['buy date', 'buydate', 'buy_date', 'purchase date', 'entry date', 'open date'],
+  buyDay:          ['buy day', 'buyday', 'buy_day', 'entry day'],
   buyPrice:        ['buy price', 'buyprice', 'purchase price', 'buy_price'],
   buyAmount:       ['buy amount', 'buyamount', 'buy total', 'total buy', 'buy_amount'],
+  date:            ['sell date', 'selldate', 'sell_date', 'date', 'trade date', 'tradedate', 'trade_date', 'exit date', 'close date'],
+  day:             ['sell day', 'sellday', 'sell_day', 'day', 'exit day'],
   sellPrice:       ['sell price', 'sellprice', 'sale price', 'sell_price'],
   sellAmount:      ['sell amount', 'sellamount', 'sell total', 'total sell', 'sell_amount'],
   pl:              ['p/l', 'pl', 'profit/loss', 'profit loss', 'pnl', 'p&l', 'gain/loss', 'net', 'realized p&l'],
@@ -107,7 +110,7 @@ async function parseExcelFile(file) {
       const field = headerMap[colNum - 1];
       if (!field) return;
       const raw = resolveCell(cell.value);
-      if (field === 'date') tx[field] = excelDateToString(raw);
+      if (field === 'date' || field === 'buyDate') tx[field] = excelDateToString(raw);
       else if (['buyPrice','buyAmount','sellPrice','sellAmount','pl','optionCount'].includes(field))
         tx[field] = parseNumeric(raw);
       else tx[field] = String(raw ?? '').trim();
@@ -118,12 +121,14 @@ async function parseExcelFile(file) {
 
     // Validate
     const rowErrors = [];
-    if (!tx.date) rowErrors.push('missing date');
+    if (!tx.date) rowErrors.push('missing sell date');
     if (!tx.symbol) rowErrors.push('missing symbol');
-    if (tx.date && !/^\d{4}-\d{2}-\d{2}$/.test(tx.date)) rowErrors.push(`unrecognised date "${tx.date}"`);
+    if (tx.date && !/^\d{4}-\d{2}-\d{2}$/.test(tx.date)) rowErrors.push(`unrecognised sell date "${tx.date}"`);
+    if (tx.buyDate && !/^\d{4}-\d{2}-\d{2}$/.test(tx.buyDate)) rowErrors.push(`unrecognised buy date "${tx.buyDate}"`);
 
-    // Auto-fill day if absent
+    // Auto-fill days if absent
     if (!tx.day && tx.date) tx.day = autoDay(tx.date);
+    if (!tx.buyDay && tx.buyDate) tx.buyDay = autoDay(tx.buyDate);
 
     if (rowErrors.length) errors.push({ rowNum, errors: rowErrors, tx });
     else rows.push(tx);
@@ -213,18 +218,21 @@ export default function Export() {
 
       const ws = wb.addWorksheet('Transactions');
       ws.columns = [
-        { header: 'Date', key: 'date', width: 14 },
-        { header: 'Day', key: 'day', width: 12 },
-        { header: 'Symbol', key: 'symbol', width: 10 },
-        { header: 'Contracts', key: 'optionCount', width: 12 },
-        { header: 'Buy Price', key: 'buyPrice', width: 12 },
-        { header: 'Buy Amount', key: 'buyAmount', width: 14 },
-        { header: 'Sell Price', key: 'sellPrice', width: 12 },
-        { header: 'Sell Amount', key: 'sellAmount', width: 14 },
-        { header: 'P/L', key: 'pl', width: 14 },
-        { header: 'Account', key: 'account', width: 16 },
-        { header: 'Service Provider', key: 'serviceProvider', width: 18 },
-        { header: 'Comments', key: 'comments', width: 30 },
+        { header: 'Symbol',           key: 'symbol',          width: 10 },
+        { header: 'Trade Type',        key: 'tradeType',       width: 12 },
+        { header: 'Contracts',         key: 'optionCount',     width: 12 },
+        { header: 'Buy Date',          key: 'buyDate',         width: 14 },
+        { header: 'Buy Day',           key: 'buyDay',          width: 12 },
+        { header: 'Buy Price',         key: 'buyPrice',        width: 12 },
+        { header: 'Buy Amount',        key: 'buyAmount',       width: 14 },
+        { header: 'Sell Date',         key: 'date',            width: 14 },
+        { header: 'Sell Day',          key: 'day',             width: 12 },
+        { header: 'Sell Price',        key: 'sellPrice',       width: 12 },
+        { header: 'Sell Amount',       key: 'sellAmount',      width: 14 },
+        { header: 'P/L',               key: 'pl',              width: 14 },
+        { header: 'Account',           key: 'account',         width: 16 },
+        { header: 'Service Provider',  key: 'serviceProvider', width: 18 },
+        { header: 'Comments',          key: 'comments',        width: 30 },
       ];
       ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
       ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -232,13 +240,21 @@ export default function Export() {
       filtered.forEach(t => {
         const pl = parseFloat(t.pl) || 0;
         const row = ws.addRow({
-          date: t.date, day: t.day, symbol: t.symbol,
+          symbol: t.symbol,
+          tradeType: t.tradeType || 'Option',
           optionCount: parseFloat(t.optionCount) || null,
+          buyDate: t.buyDate || '',
+          buyDay: t.buyDay || '',
           buyPrice: parseFloat(t.buyPrice) || null,
           buyAmount: parseFloat(t.buyAmount) || null,
+          date: t.date,
+          day: t.day,
           sellPrice: parseFloat(t.sellPrice) || null,
           sellAmount: parseFloat(t.sellAmount) || null,
-          pl, account: t.account || '', serviceProvider: t.serviceProvider || '', comments: t.comments || '',
+          pl,
+          account: t.account || '',
+          serviceProvider: t.serviceProvider || '',
+          comments: t.comments || '',
         });
         ['buyPrice','buyAmount','sellPrice','sellAmount','pl'].forEach(k => {
           row.getCell(k).numFmt = '$#,##0.00';
@@ -246,7 +262,7 @@ export default function Export() {
         const plCell = row.getCell('pl');
         plCell.font = { color: { argb: pl >= 0 ? 'FF16A34A' : 'FFDC2626' }, bold: true };
       });
-      ws.autoFilter = { from: 'A1', to: 'L1' };
+      ws.autoFilter = { from: 'A1', to: 'O1' };
 
       const stats = summary();
       const sw = wb.addWorksheet('Summary');
@@ -302,13 +318,26 @@ export default function Export() {
 
       autoTable(doc, {
         startY: summaryY + 26,
-        head: [['Date','Symbol','Contracts','Buy Price','Buy Amt','Sell Price','Sell Amt','P/L','Account','Provider','Comments']],
-        body: filtered.map(t => [t.date, t.symbol, t.optionCount||'', fmt(t.buyPrice), fmt(t.buyAmount), fmt(t.sellPrice), fmt(t.sellAmount), fmt(t.pl), t.account||'', t.serviceProvider||'', t.comments||'']),
-        styles: { fontSize: 7, cellPadding: 2 },
-        headStyles: { fillColor: [30, 64, 175], textColor: 255, fontSize: 7 },
+        head: [['Symbol','Type','Qty','Buy Date','Buy Price','Buy Amt','Sell Date','Sell Price','Sell Amt','P/L','Account','Comments']],
+        body: filtered.map(t => [
+          t.symbol,
+          t.tradeType || 'Option',
+          t.optionCount || '',
+          t.buyDate || '',
+          fmt(t.buyPrice),
+          fmt(t.buyAmount),
+          t.date,
+          fmt(t.sellPrice),
+          fmt(t.sellAmount),
+          fmt(t.pl),
+          t.account || '',
+          t.comments || '',
+        ]),
+        styles: { fontSize: 6.5, cellPadding: 2 },
+        headStyles: { fillColor: [30, 64, 175], textColor: 255, fontSize: 6.5 },
         alternateRowStyles: { fillColor: [249, 250, 251] },
         didParseCell: (data) => {
-          if (data.section === 'body' && data.column.index === 7) {
+          if (data.section === 'body' && data.column.index === 9) {
             const val = parseFloat(String(data.cell.raw).replace('$','') || 0);
             data.cell.styles.textColor = val >= 0 ? [22,163,74] : [220,38,38];
             data.cell.styles.fontStyle = 'bold';
