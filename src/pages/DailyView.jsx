@@ -12,16 +12,11 @@ export default function DailyView() {
   const initDate = location.state?.date || format(new Date(), 'yyyy-MM-dd');
   const [selectedDate, setSelectedDate] = useState(initDate);
 
-  const WEEKEND = new Set([0, 6]); // Sunday, Saturday
-
   const days = useMemo(() => {
     const map = {};
     transactions.forEach(t => {
       const d = t.date; // sell date
       if (!d) return;
-      // Skip transactions whose sell date falls on a weekend — markets are closed
-      const dow = new Date(d + 'T12:00:00').getDay();
-      if (WEEKEND.has(dow)) return;
       if (!map[d]) map[d] = { count: 0, pl: 0 };
       map[d].count++;
       map[d].pl += parseFloat(t.pl) || 0;
@@ -53,7 +48,7 @@ export default function DailyView() {
     <div className="space-y-5">
       <div>
         <h2 className="text-xl font-bold text-gray-900 dark:text-white">Daily View</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400">Closed trades grouped by sell date (weekdays only)</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">Closed trades grouped by sell date</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
