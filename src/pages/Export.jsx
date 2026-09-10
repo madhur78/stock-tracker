@@ -37,17 +37,29 @@ function buildHeaderMap(headers) {
   return map;
 }
 
+function utcDateString(date) {
+  // Always format using UTC components so local timezone never shifts the date.
+  // ExcelJS returns dates as UTC midnight; using getFullYear/getMonth/getDate
+  // would shift to local time and produce the previous day in US timezones.
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function excelDateToString(val) {
-  if (val instanceof Date) return format(val, 'yyyy-MM-dd');
+  if (val instanceof Date) return utcDateString(val);
   if (typeof val === 'number' && val > 1) {
     // Excel serial date: days since 1900-01-01 (with Lotus bug offset)
     const ms = (val - 25569) * 86400 * 1000;
-    return format(new Date(ms), 'yyyy-MM-dd');
+    return utcDateString(new Date(ms));
   }
   if (typeof val === 'string') {
-    // Normalise common date formats to yyyy-MM-dd
-    const d = new Date(val);
-    if (!isNaN(d)) return format(d, 'yyyy-MM-dd');
+    // ISO date strings (yyyy-MM-dd) are parsed as UTC midnight by spec — use UTC components.
+    // Other string formats: pin to noon local time to avoid midnight-boundary drift.
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(val.trim());
+    const d = iso ? new Date(val.trim()) : new Date(val.trim().replace(/(\d{4}-\d{2}-\d{2})/, '$1T12:00:00'));
+    if (!isNaN(d)) return iso ? utcDateString(d) : format(d, 'yyyy-MM-dd');
   }
   return String(val ?? '');
 }
