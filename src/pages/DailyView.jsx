@@ -55,6 +55,7 @@ export default function DailyView() {
         <div className="card overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Trading Days</h3>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Grouped by Sell Date</p>
           </div>
           <div className="overflow-y-auto max-h-[500px] divide-y divide-gray-100 dark:divide-gray-700">
             {sortedDays.length === 0 && (
@@ -121,7 +122,7 @@ export default function DailyView() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-800/50">
-                      {['Symbol', 'Buy Date', 'Contracts', 'Buy Amt', 'Sell Amt', 'P/L', 'Account', ''].map(h => (
+                      {['Symbol', 'Buy Date', 'Sell Date', 'Contracts', 'Buy Amt', 'Sell Amt', 'P/L', 'Account', ''].map(h => (
                         <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
@@ -135,6 +136,11 @@ export default function DailyView() {
                           <td className="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">
                             {t.buyDate
                               ? <>{t.buyDate}<span className="ml-1 opacity-60">{t.buyDay?.slice(0,3)}</span></>
+                              : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">
+                            {t.date
+                              ? <>{t.date}<span className="ml-1 opacity-60">{t.day?.slice(0,3)}</span></>
                               : '—'}
                           </td>
                           <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{t.optionCount || '—'}</td>
