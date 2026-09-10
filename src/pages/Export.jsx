@@ -117,11 +117,10 @@ async function parseExcelFile(file) {
     });
 
     // Skip completely blank rows
-    if (!tx.symbol && !tx.date) return;
+    if (!tx.symbol && !tx.date && !tx.buyDate) return;
 
-    // Validate
+    // Validate — only symbol is required; sell date is optional (open trades have none)
     const rowErrors = [];
-    if (!tx.date) rowErrors.push('missing sell date');
     if (!tx.symbol) rowErrors.push('missing symbol');
     if (tx.date && !/^\d{4}-\d{2}-\d{2}$/.test(tx.date)) rowErrors.push(`unrecognised sell date "${tx.date}"`);
     if (tx.buyDate && !/^\d{4}-\d{2}-\d{2}$/.test(tx.buyDate)) rowErrors.push(`unrecognised buy date "${tx.buyDate}"`);
@@ -477,7 +476,7 @@ export default function Export() {
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-gray-50 dark:bg-gray-800">
-                          {['Date', 'Symbol', 'Contracts', 'Buy Amt', 'Sell Amt', 'P/L', 'Account'].map(h => (
+                          {['Symbol', 'Buy Date', 'Sell Date', 'Contracts', 'Buy Amt', 'Sell Amt', 'P/L', 'Account'].map(h => (
                             <th key={h} className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">{h}</th>
                           ))}
                         </tr>
@@ -487,12 +486,19 @@ export default function Export() {
                           const pl = parseFloat(row.pl) || 0;
                           return (
                             <tr key={i} className="bg-white dark:bg-gray-900">
-                              <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">{row.date}</td>
                               <td className="px-3 py-2 font-semibold text-gray-900 dark:text-white">{row.symbol}</td>
+                              <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">{row.buyDate || '—'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {row.date
+                                  ? <span className="text-gray-600 dark:text-gray-400">{row.date}</span>
+                                  : <span className="text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-1.5 py-0.5 rounded">Open</span>}
+                              </td>
                               <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{row.optionCount || '—'}</td>
                               <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{fmt(row.buyAmount)}</td>
-                              <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{fmt(row.sellAmount)}</td>
-                              <td className={`px-3 py-2 font-semibold ${pl >= 0 ? 'text-green-600' : 'text-red-500'}`}>{fmt(pl)}</td>
+                              <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{row.date ? fmt(row.sellAmount) : '—'}</td>
+                              <td className={`px-3 py-2 font-semibold ${row.date ? (pl >= 0 ? 'text-green-600' : 'text-red-500') : 'text-gray-400'}`}>
+                                {row.date ? fmt(pl) : '—'}
+                              </td>
                               <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{row.account || '—'}</td>
                             </tr>
                           );
