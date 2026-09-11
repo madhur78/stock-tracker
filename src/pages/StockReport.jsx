@@ -1,6 +1,6 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { format, subMonths } from 'date-fns';
-import { Search, Download, TrendingUp, TrendingDown, BarChart2, Calendar, ChevronDown, ChevronUp, Building2, Star, Users, ExternalLink, Lightbulb } from 'lucide-react';
+import { Search, Download, TrendingUp, TrendingDown, BarChart2, Calendar, ChevronDown, ChevronUp, Building2, Star, Users, ExternalLink, Lightbulb, DollarSign } from 'lucide-react';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -27,6 +27,137 @@ function SummaryCard({ label, value, sub, color }) {
       <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">{label}</p>
       <p className={`text-xl font-bold ${color ?? 'text-gray-900 dark:text-white'}`}>{value}</p>
       {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+// ── Earnings Section ──────────────────────────────────────────────────────────
+
+function EarningsSection({ symbol }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+
+  useEffect(() => {
+    if (!symbol) return;
+    setData(null); setError('');
+    setLoading(true);
+    fetch(`/api/earnings?symbol=${encodeURIComponent(symbol)}`)
+      .then(r => r.json())
+      .then(j => { if (j.error) throw new Error(j.error); setData(j); })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [symbol]);
+
+  const fmtEps = n => n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(2);
+  const fmtSurp = n => n == null ? '—' : (n >= 0 ? '+' : '') + (n * 100).toFixed(1) + '%';
+
+  return (
+    <div className="card overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
+        <div className="flex items-center gap-2">
+          <DollarSign size={17} className="text-purple-500" />
+          <span className="font-semibold text-gray-800 dark:text-gray-200">Earnings History — {symbol}</span>
+          {loading && <span className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin ml-1" />}
+        </div>
+        {data?.nextDate && (
+          <span className="flex items-center gap-1.5 text-xs font-medium bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-700 px-2.5 py-1 rounded-full">
+            <Calendar size={11} />
+            Next: {data.nextDate}
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <p className="text-sm text-red-500 dark:text-red-400 px-5 py-4">{error}</p>
+      )}
+
+      {!loading && !error && !data && (
+        <p className="text-sm text-gray-400 px-5 py-4">Loading earnings data…</p>
+      )}
+
+      {data?.history?.length > 0 && (
+        <div className="divide-y divide-gray-100 dark:divide-gray-700/60">
+          {data.history.map((q, i) => {
+            const beat = q.surprisePct != null && q.surprisePct > 0;
+            const miss = q.surprisePct != null && q.surprisePct < 0;
+            const isLatest = i === 0;
+
+            const rowBg = beat
+              ? isLatest
+                ? 'bg-green-50/70 dark:bg-green-900/20'
+                : 'bg-green-50/30 dark:bg-green-900/10'
+              : miss
+                ? isLatest
+                  ? 'bg-red-50/70 dark:bg-red-900/20'
+                  : 'bg-red-50/30 dark:bg-red-900/10'
+                : '';
+
+            const borderColor = beat ? 'border-l-green-500' : miss ? 'border-l-red-500' : 'border-l-gray-300 dark:border-l-gray-600';
+
+            return (
+              <div key={q.period ?? i}
+                className={`flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3.5 border-l-4 ${borderColor} ${rowBg} transition-colors`}
+              >
+                {/* Quarter + date */}
+                <div className="min-w-[90px]">
+                  <p className={`text-sm font-bold ${isLatest ? 'text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'}`}>
+                    {q.period ?? '—'}
+                    {isLatest && <span className="ml-2 text-[10px] font-semibold bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded-full align-middle">Latest</span>}
+                  </p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{q.date ?? '—'}</p>
+                </div>
+
+                {/* EPS Estimate */}
+                <div className="text-center">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-0.5">EPS Est.</p>
+                  <p className="text-sm font-semibold text-gray-600 dark:text-gray-400">{q.epsEstimate != null ? q.epsEstimate.toFixed(2) : '—'}</p>
+                </div>
+
+                {/* EPS Actual */}
+                <div className="text-center">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-0.5">EPS Actual</p>
+                  <p className={`text-sm font-bold ${beat ? 'text-green-600 dark:text-green-400' : miss ? 'text-red-500 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'}`}>
+                    {q.epsActual != null ? q.epsActual.toFixed(2) : '—'}
+                  </p>
+                </div>
+
+                {/* Surprise */}
+                <div className="text-center">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-0.5">Surprise</p>
+                  <p className={`text-sm font-bold ${beat ? 'text-green-600 dark:text-green-400' : miss ? 'text-red-500 dark:text-red-400' : 'text-gray-500'}`}>
+                    {fmtSurp(q.surprisePct)}
+                  </p>
+                </div>
+
+                {/* Beat/Miss badge */}
+                <div className="ml-auto">
+                  {beat && (
+                    <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ${isLatest ? 'bg-green-500 text-white' : 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'}`}>
+                      ✓ Beat
+                    </span>
+                  )}
+                  {miss && (
+                    <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ${isLatest ? 'bg-red-500 text-white' : 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400'}`}>
+                      ✗ Miss
+                    </span>
+                  )}
+                  {!beat && !miss && q.surprisePct === 0 && (
+                    <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+                      ≈ In-line
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {data?.history?.length === 0 && !loading && (
+        <p className="text-sm text-gray-400 px-5 py-4">No earnings history available for {symbol}.</p>
+      )}
     </div>
   );
 }
@@ -400,6 +531,9 @@ export default function StockReport() {
         </div>
         {error && <p className="mt-3 text-sm text-red-500 dark:text-red-400">{error}</p>}
       </div>
+
+      {/* Earnings History */}
+      {fetched && <EarningsSection symbol={fetched} />}
 
       {/* Stock Insight Panel */}
       {fetched && <StockInsightPanel symbol={fetched} />}

@@ -369,6 +369,69 @@ function yahooFinancePlugin() {
     res.end(JSON.stringify({ ok: true, source: 'yahoo-finance-v7+stooq-fallback' }));
   }
 
+  async function earningsHandler(req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    const p      = new URL(req.url, 'http://localhost');
+    const symbol = p.searchParams.get('symbol')?.trim().toUpperCase();
+    if (!symbol) { res.writeHead(400); res.end(JSON.stringify({ error: 'symbol required' })); return; }
+
+    const modules  = 'earningsHistory,calendarEvents';
+    const WIN_UA   = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+    async function fetchSummary(host, crumb = null, cookies = null) {
+      const crumbParam = crumb ? `&crumb=${encodeURIComponent(crumb)}` : '';
+      const r = await nodeRequest(
+        `https://${host}/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}${crumbParam}&lang=en-US&region=US`,
+        { headers: { 'User-Agent': WIN_UA, Accept: 'application/json', Referer: 'https://finance.yahoo.com/', ...(cookies ? { Cookie: cookies } : {}) } },
+      );
+      if (r.status === 404) throw new Error(`Symbol "${symbol}" not found.`);
+      if (r.status !== 200) throw new Error(`Yahoo Finance returned HTTP ${r.status}`);
+      const json   = JSON.parse(r.body);
+      const result = json?.quoteSummary?.result?.[0];
+      if (!result) throw new Error('No earnings data returned.');
+      return result;
+    }
+
+    try {
+      let result;
+      try { result = await fetchSummary('query2.finance.yahoo.com'); }
+      catch (_) {
+        const sess = await getYFSession();
+        if (!sess) throw new Error('Yahoo Finance session unavailable.');
+        result = await fetchSummary('query1.finance.yahoo.com', sess.crumb, sess.cookies);
+      }
+
+      const raw = v => (v && typeof v === 'object' ? v.raw : v) ?? null;
+
+      const history = (result.earningsHistory?.history ?? [])
+        .slice(-4)
+        .map(h => ({
+          period:          h.period ?? null,
+          date:            h.quarter ? new Date(raw(h.quarter) * 1000).toISOString().slice(0, 10) : null,
+          epsEstimate:     raw(h.epsEstimate),
+          epsActual:       raw(h.epsActual),
+          epsDifference:   raw(h.epsDifference),
+          surprisePct:     raw(h.surprisePercent),
+        }))
+        .reverse(); // most recent first
+
+      // Next earnings date from calendarEvents
+      const nextTs = result.calendarEvents?.earnings?.earningsDate?.[0];
+      const nextDate = nextTs ? new Date(raw(nextTs) * 1000).toISOString().slice(0, 10) : null;
+
+      console.log(`[earnings] ${symbol} — ${history.length} quarters, next: ${nextDate ?? 'unknown'}`);
+      res.writeHead(200);
+      res.end(JSON.stringify({ symbol, history, nextDate }));
+    } catch (err) {
+      console.error('[earnings]', err.message);
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   async function stockInfoHandler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json');
@@ -509,6 +572,7 @@ function yahooFinancePlugin() {
     server.middlewares.use((req, res, next) => {
       if (req.url?.startsWith('/api/quotes'))     return quotesHandler(req, res);
       if (req.url?.startsWith('/api/health'))     return healthHandler(req, res);
+      if (req.url?.startsWith('/api/earnings'))   return earningsHandler(req, res);
       if (req.url?.startsWith('/api/stock-info')) return stockInfoHandler(req, res);
       next();
     });
