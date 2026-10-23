@@ -122,7 +122,7 @@ export default function DailyView() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-800/50">
-                      {['Symbol', 'Buy Date', 'Sell Date', 'Contracts', 'Buy Amt', 'Sell Amt', 'P/L', 'Account', ''].map(h => (
+                      {['Symbol', 'Buy Date', 'Sell Date', 'Contracts', 'Duration', 'Buy Amt', 'Sell Amt', 'P/L', 'Account', ''].map(h => (
                         <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">{h}</th>
                       ))}
                     </tr>
@@ -144,6 +144,11 @@ export default function DailyView() {
                               : '—'}
                           </td>
                           <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{t.optionCount || '—'}</td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            {t.duration
+                              ? <span className="text-xs font-medium bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-full">{t.duration}</span>
+                              : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                          </td>
                           <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{fmt(t.buyAmount)}</td>
                           <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{fmt(t.sellAmount)}</td>
                           <td className={`px-4 py-3 font-semibold ${pl >= 0 ? 'text-green-600' : 'text-red-500'}`}>{fmt(pl)}</td>

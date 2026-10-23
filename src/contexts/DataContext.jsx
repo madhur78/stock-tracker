@@ -20,10 +20,11 @@ export function DataProvider({ children }) {
       } catch {
         setTransactions([]);
       }
+      setLoaded(true); // only signal ready once data is loaded for a real user
     } else {
       setTransactions([]);
+      // leave loaded=false when no user — prevents stale-loaded race in TradeContext
     }
-    setLoaded(true);
   }, [user]);
 
   const save = useCallback((data) => {

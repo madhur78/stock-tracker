@@ -23,6 +23,7 @@ const HEADER_ALIASES = {
   pl:              ['p/l', 'pl', 'profit/loss', 'profit loss', 'pnl', 'p&l', 'gain/loss', 'net', 'realized p&l'],
   account:         ['account', 'account name'],
   serviceProvider: ['service provider', 'serviceprovider', 'broker', 'provider', 'platform'],
+  duration:        ['duration', 'hold duration', 'holding duration', 'hold period', 'dte', 'hold time'],
   comments:        ['comments', 'notes', 'comment', 'note', 'remarks'],
 };
 
@@ -243,6 +244,7 @@ export default function Export() {
         { header: 'P/L',               key: 'pl',              width: 14 },
         { header: 'Account',           key: 'account',         width: 16 },
         { header: 'Service Provider',  key: 'serviceProvider', width: 18 },
+        { header: 'Hold Duration',     key: 'duration',        width: 14 },
         { header: 'Comments',          key: 'comments',        width: 30 },
       ];
       ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
@@ -265,6 +267,7 @@ export default function Export() {
           pl,
           account: t.account || '',
           serviceProvider: t.serviceProvider || '',
+          duration: t.duration || '',
           comments: t.comments || '',
         });
         ['buyPrice','buyAmount','sellPrice','sellAmount','pl'].forEach(k => {
@@ -329,7 +332,7 @@ export default function Export() {
 
       autoTable(doc, {
         startY: summaryY + 26,
-        head: [['Symbol','Type','Qty','Buy Date','Buy Price','Buy Amt','Sell Date','Sell Price','Sell Amt','P/L','Account','Comments']],
+        head: [['Symbol','Type','Qty','Buy Date','Buy Price','Buy Amt','Sell Date','Sell Price','Sell Amt','P/L','Account','Duration','Comments']],
         body: filtered.map(t => [
           t.symbol,
           t.tradeType || 'Option',
@@ -342,13 +345,14 @@ export default function Export() {
           fmt(t.sellAmount),
           fmt(t.pl),
           t.account || '',
+          t.duration || '',
           t.comments || '',
         ]),
         styles: { fontSize: 6.5, cellPadding: 2 },
         headStyles: { fillColor: [30, 64, 175], textColor: 255, fontSize: 6.5 },
         alternateRowStyles: { fillColor: [249, 250, 251] },
         didParseCell: (data) => {
-          if (data.section === 'body' && data.column.index === 9) {
+          if (data.section === 'body' && data.column.index === 9) { // P/L is still index 9
             const val = parseFloat(String(data.cell.raw).replace('$','') || 0);
             data.cell.styles.textColor = val >= 0 ? [22,163,74] : [220,38,38];
             data.cell.styles.fontStyle = 'bold';

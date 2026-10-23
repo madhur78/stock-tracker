@@ -285,7 +285,7 @@ function GroupTable({ groups, labelFn }) {
                           <table className="w-full text-xs">
                             <thead>
                               <tr className="bg-gray-100 dark:bg-gray-800">
-                                {['Buy Date','Sell Date','Days','Symbol','Contracts','Buy Amt','Sell Amt','P/L','Account','Provider','Comments'].map(h => (
+                                {['Buy Date','Sell Date','Days','Symbol','Contracts','Duration','Buy Amt','Sell Amt','P/L','Account','Provider','Comments'].map(h => (
                                   <th key={h} className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">{h}</th>
                                 ))}
                               </tr>
@@ -308,6 +308,11 @@ function GroupTable({ groups, labelFn }) {
                                     </td>
                                     <td className="px-3 py-2 font-semibold text-gray-900 dark:text-white">{t.symbol}</td>
                                     <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{t.optionCount || '—'}</td>
+                                    <td className="px-3 py-2 whitespace-nowrap">
+                                      {t.duration
+                                        ? <span className="text-xs font-medium bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full">{t.duration}</span>
+                                        : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                                    </td>
                                     <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{curr(t.buyAmount)}</td>
                                     <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{curr(t.sellAmount)}</td>
                                     <td className={`px-3 py-2 font-bold ${tpl >= 0 ? 'text-green-600' : 'text-red-500'}`}>{curr(tpl)}</td>

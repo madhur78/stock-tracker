@@ -20,13 +20,13 @@ const SERVICE_PROVIDERS = [
   'GenZTrade',
   'Stock PlayMaker (X)',
   'Sam Parikh',
+  'Meta Muse',
   'Self',
 ];
 
 const TRADE_TYPES = ['Option', 'Stock'];
 
 const COMMENT_SUGGESTIONS = [
-  '0DTE',
   'Auto Expired',
   'Stop Loss Hit',
   'Take Profit Hit',
@@ -36,6 +36,8 @@ const COMMENT_SUGGESTIONS = [
   'Paper Trade',
   'Closed at Open',
 ];
+
+const DURATION_OPTIONS = ['0DTE', 'Within Week', '1-2 Weeks', '2-4 Weeks', '4-8 Weeks', '> 8 Weeks'];
 
 const today = format(new Date(), 'yyyy-MM-dd');
 
@@ -53,6 +55,7 @@ const defaultForm = {
   sellAmount: '',
   pl: '',
   account: '',
+  duration: '',
   comments: '',
   serviceProvider: '',
 };
@@ -224,6 +227,14 @@ export default function TransactionForm() {
               placeholder="Select type…"
               value={form.tradeType} onChange={set('tradeType')}
             />
+            {form.tradeType === 'Option' && (
+              <SelectField
+                label="Hold Duration"
+                options={DURATION_OPTIONS}
+                placeholder="Select duration…"
+                value={form.duration} onChange={set('duration')}
+              />
+            )}
             <Field
               label="Sell Date *" type="date"
               value={form.date} onChange={set('date')}

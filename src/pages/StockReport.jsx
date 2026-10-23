@@ -48,17 +48,16 @@ function EarningsSection({ symbol, onDatesLoaded }) {
       .then(j => {
         if (j.error) throw new Error(j.error);
         setData(j);
-        onDatesLoaded?.(j.history?.map(h => h.date).filter(Boolean) ?? []);
+        onDatesLoaded?.(j.history?.map(h => h.reportDate).filter(Boolean) ?? []);
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }, [symbol]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fmtSurp = n => n == null ? '—' : (n >= 0 ? '+' : '') + (n * 100).toFixed(1) + '%';
+  const fmtEps = n => n != null ? `$${n.toFixed(2)}` : '—';
 
   return (
     <div className="card overflow-hidden">
-      {/* Header — clickable to toggle */}
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
@@ -81,77 +80,141 @@ function EarningsSection({ symbol, onDatesLoaded }) {
       </button>
 
       {open && (
-        <div className="border-t border-gray-100 dark:border-gray-700">
-          {error && (
-            <p className="text-sm text-red-500 dark:text-red-400 px-5 py-4">{error}</p>
-          )}
-          {loading && !data && (
-            <p className="text-sm text-gray-400 px-5 py-4">Loading earnings data…</p>
-          )}
+        <div className="border-t border-gray-200 dark:border-gray-700">
+          {error && <p className="text-sm text-red-500 dark:text-red-400 px-5 py-4">{error}</p>}
+          {loading && !data && <p className="text-sm text-gray-500 dark:text-gray-400 px-5 py-4">Loading earnings data…</p>}
           {data?.history?.length > 0 && (
-            <div className="divide-y divide-gray-100 dark:divide-gray-700/60">
-              {data.history.map((q, i) => {
-                const beat     = q.surprisePct != null && q.surprisePct > 0;
-                const miss     = q.surprisePct != null && q.surprisePct < 0;
-                const isLatest = i === 0;
-                const rowBg    = beat
-                  ? isLatest ? 'bg-green-50/70 dark:bg-green-900/20' : 'bg-green-50/30 dark:bg-green-900/10'
-                  : miss
-                    ? isLatest ? 'bg-red-50/70 dark:bg-red-900/20' : 'bg-red-50/30 dark:bg-red-900/10'
-                    : '';
-                const borderColor = beat ? 'border-l-green-500' : miss ? 'border-l-red-500' : 'border-l-gray-300 dark:border-l-gray-600';
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-gray-100 dark:bg-gray-800 border-b-2 border-gray-300 dark:border-gray-600">
+                    {['Quarter', 'Report Date', 'Revenue (Est. vs Actual)', 'EPS (Est. vs Actual)', 'Performance Outcome'].map(h => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-200 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.history.map((q, i) => {
+                    const epsBeat   = q.surprisePct != null && q.surprisePct > 0;
+                    const epsMiss   = q.surprisePct != null && q.surprisePct < 0;
+                    const epsInline = q.surprisePct === 0;
+                    const isLatest  = i === 0;
 
-                return (
-                  <div key={q.period ?? i}
-                    className={`flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3.5 border-l-4 ${borderColor} ${rowBg}`}
-                  >
-                    <div className="min-w-[90px]">
-                      <p className={`text-sm font-bold ${isLatest ? 'text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'}`}>
-                        {q.period ?? '—'}
-                        {isLatest && <span className="ml-2 text-[10px] font-semibold bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded-full align-middle">Latest</span>}
-                      </p>
-                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{q.date ?? '—'}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-0.5">EPS Est.</p>
-                      <p className="text-sm font-semibold text-gray-600 dark:text-gray-400">{q.epsEstimate != null ? q.epsEstimate.toFixed(2) : '—'}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-0.5">EPS Actual</p>
-                      <p className={`text-sm font-bold ${beat ? 'text-green-600 dark:text-green-400' : miss ? 'text-red-500 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'}`}>
-                        {q.epsActual != null ? q.epsActual.toFixed(2) : '—'}
-                      </p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-0.5">Surprise</p>
-                      <p className={`text-sm font-bold ${beat ? 'text-green-600 dark:text-green-400' : miss ? 'text-red-500 dark:text-red-400' : 'text-gray-500'}`}>
-                        {fmtSurp(q.surprisePct)}
-                      </p>
-                    </div>
-                    <div className="ml-auto">
-                      {beat && (
-                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${isLatest ? 'bg-green-500 text-white' : 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'}`}>
-                          ✓ Beat
-                        </span>
-                      )}
-                      {miss && (
-                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${isLatest ? 'bg-red-500 text-white' : 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400'}`}>
-                          ✗ Miss
-                        </span>
-                      )}
-                      {!beat && !miss && q.surprisePct === 0 && (
-                        <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
-                          ≈ In-line
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                    const revBeat = q.revenueEstimate != null && q.revenueActual != null && q.revenueActual > q.revenueEstimate;
+                    const revMiss = q.revenueEstimate != null && q.revenueActual != null && q.revenueActual < q.revenueEstimate;
+                    const hasRevComp = q.revenueEstimate != null && q.revenueActual != null;
+                    const revSurpPct = hasRevComp
+                      ? (((q.revenueActual - q.revenueEstimate) / Math.abs(q.revenueEstimate)) * 100).toFixed(2)
+                      : null;
+
+                    const rowBg = epsBeat
+                      ? isLatest ? 'bg-green-50 dark:bg-green-900/20' : 'bg-green-50/30 dark:bg-green-900/10'
+                      : epsMiss
+                        ? isLatest ? 'bg-red-50 dark:bg-red-900/20' : 'bg-red-50/30 dark:bg-red-900/10'
+                        : isLatest ? 'bg-blue-50/30 dark:bg-blue-900/10' : '';
+                    const borderColor = epsBeat
+                      ? 'border-l-green-500'
+                      : epsMiss ? 'border-l-red-400' : 'border-l-gray-300 dark:border-l-gray-600';
+                    const epsSurpStr = q.surprisePct != null
+                      ? `(${q.surprisePct >= 0 ? '+' : ''}${(q.surprisePct * 100).toFixed(2)}% surprise)`
+                      : '';
+
+                    return (
+                      <tr key={q.period ?? i} className={`border-l-4 ${borderColor} ${rowBg} border-b border-gray-200 dark:border-gray-700/60`}>
+                        {/* Quarter */}
+                        <td className="px-4 py-4 align-top whitespace-nowrap">
+                          <div className={`font-bold text-base ${isLatest ? 'text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-200'}`}>
+                            {q.period ?? '—'}
+                          </div>
+                          {isLatest && (
+                            <span className="mt-1 inline-block text-[10px] font-bold bg-purple-600 text-white px-2 py-0.5 rounded-full">Latest</span>
+                          )}
+                        </td>
+
+                        {/* Report Date */}
+                        <td className="px-4 py-4 align-top whitespace-nowrap">
+                          <div className="font-semibold text-gray-900 dark:text-gray-100">
+                            {q.reportDate ?? '—'}
+                          </div>
+                        </td>
+
+                        {/* Revenue Est. vs Actual */}
+                        <td className="px-4 py-4 align-top whitespace-nowrap">
+                          {q.revenueEstimate != null && (
+                            <div className="text-gray-500 dark:text-gray-400 text-xs mb-1">
+                              Est: <span className="font-semibold text-gray-700 dark:text-gray-300">{fmtLargeNum(q.revenueEstimate)}</span>
+                            </div>
+                          )}
+                          {q.revenueActual != null ? (
+                            <div className="text-xs">
+                              Act: <span className={`font-bold ${hasRevComp ? (revBeat ? 'text-green-700 dark:text-green-400' : revMiss ? 'text-red-600 dark:text-red-400' : 'text-gray-800 dark:text-gray-100') : 'text-gray-800 dark:text-gray-100'}`}>
+                                {fmtLargeNum(q.revenueActual)}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>
+                          )}
+                        </td>
+
+                        {/* EPS Est. vs Actual */}
+                        <td className="px-4 py-4 align-top whitespace-nowrap">
+                          {q.epsEstimate != null && (
+                            <div className="text-gray-500 dark:text-gray-400 text-xs mb-1">
+                              Est: <span className="font-semibold text-gray-700 dark:text-gray-300">{fmtEps(q.epsEstimate)}</span>
+                            </div>
+                          )}
+                          <div className="text-xs">
+                            Act: <span className={`font-bold ${epsBeat ? 'text-green-700 dark:text-green-400' : epsMiss ? 'text-red-600 dark:text-red-400' : 'text-gray-800 dark:text-gray-100'}`}>
+                              {fmtEps(q.epsActual)}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Performance Outcome */}
+                        <td className="px-4 py-4 align-top">
+                          <div className="flex flex-col gap-1.5">
+                            {/* Revenue outcome */}
+                            {hasRevComp ? (
+                              <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full w-fit ${revBeat ? 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300' : revMiss ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}>
+                                {revBeat ? '🟢' : revMiss ? '🔴' : '🟡'} {revBeat ? 'Beat' : revMiss ? 'Miss' : 'Met'} on Revenue
+                                {revSurpPct && <span className="opacity-80">({revBeat ? '+' : ''}{revSurpPct}%)</span>}
+                              </span>
+                            ) : q.revenueActual != null ? (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full w-fit bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                                📊 Revenue {fmtLargeNum(q.revenueActual)}
+                              </span>
+                            ) : null}
+
+                            {/* EPS outcome */}
+                            {epsBeat && (
+                              <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full w-fit ${isLatest ? 'bg-green-600 text-white' : 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300'}`}>
+                                🟢 Beat on EPS {epsSurpStr}
+                              </span>
+                            )}
+                            {epsMiss && (
+                              <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full w-fit ${isLatest ? 'bg-red-600 text-white' : 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300'}`}>
+                                🔴 Miss on EPS {epsSurpStr}
+                              </span>
+                            )}
+                            {epsInline && (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full w-fit bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200">
+                                🟡 In-line on EPS
+                              </span>
+                            )}
+                            {!epsBeat && !epsMiss && !epsInline && (
+                              <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
           {data?.history?.length === 0 && !loading && (
-            <p className="text-sm text-gray-400 px-5 py-4">No earnings history available for {symbol}.</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 px-5 py-4">No earnings history available for {symbol}.</p>
           )}
         </div>
       )}

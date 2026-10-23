@@ -27,6 +27,7 @@ function toDataTx(trade) {
     pl:              String(trade.pl         ?? ''),
     account:         trade.account         ?? '',
     serviceProvider: trade.serviceProvider ?? '',
+    duration:        trade.duration        ?? '',
     comments:        trade.comments        ?? '',
     source:          'trade-book',    // lets screens optionally badge Trade Book rows
     tradeBookId:     trade.id,        // used by migration to detect existing synced entries

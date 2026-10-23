@@ -378,8 +378,9 @@ function yahooFinancePlugin() {
     const symbol = p.searchParams.get('symbol')?.trim().toUpperCase();
     if (!symbol) { res.writeHead(400); res.end(JSON.stringify({ error: 'symbol required' })); return; }
 
-    const modules  = 'earningsHistory,calendarEvents';
-    const WIN_UA   = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    // earningsTrend provides forward revenue/EPS estimates; may cover the most-recently-reported quarter
+    const modules = 'earningsHistory,calendarEvents,earnings,earningsTrend';
+    const WIN_UA  = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
     async function fetchSummary(host, crumb = null, cookies = null) {
       const crumbParam = crumb ? `&crumb=${encodeURIComponent(crumb)}` : '';
@@ -395,30 +396,113 @@ function yahooFinancePlugin() {
       return result;
     }
 
+    // Chart API returns actual earnings announcement dates in events.earnings[ts].dateFmt
+    async function fetchChartEvents(host, crumb = null, cookies = null) {
+      const crumbParam = crumb ? `&crumb=${encodeURIComponent(crumb)}` : '';
+      try {
+        const r = await nodeRequest(
+          `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?range=2y&interval=3mo&events=earnings${crumbParam}`,
+          { headers: { 'User-Agent': WIN_UA, Accept: 'application/json', Referer: 'https://finance.yahoo.com/', ...(cookies ? { Cookie: cookies } : {}) } },
+        );
+        if (r.status !== 200) return null;
+        const json = JSON.parse(r.body);
+        return json?.chart?.result?.[0]?.events?.earnings ?? null;
+      } catch { return null; }
+    }
+
     try {
-      let result;
-      try { result = await fetchSummary('query2.finance.yahoo.com'); }
-      catch (_) {
+      let result, chartEvents;
+      try {
+        [result, chartEvents] = await Promise.all([
+          fetchSummary('query2.finance.yahoo.com'),
+          fetchChartEvents('query2.finance.yahoo.com'),
+        ]);
+      } catch (_) {
         const sess = await getYFSession();
         if (!sess) throw new Error('Yahoo Finance session unavailable.');
-        result = await fetchSummary('query1.finance.yahoo.com', sess.crumb, sess.cookies);
+        [result, chartEvents] = await Promise.all([
+          fetchSummary('query1.finance.yahoo.com', sess.crumb, sess.cookies),
+          fetchChartEvents('query1.finance.yahoo.com', sess.crumb, sess.cookies),
+        ]);
       }
 
       const raw = v => (v && typeof v === 'object' ? v.raw : v) ?? null;
 
+      // Revenue actuals: earnings.financialsChart.quarterly keyed by period label (e.g. "4Q2023")
+      const revenueActualMap = {};
+      (result.earnings?.financialsChart?.quarterly ?? []).forEach(q => {
+        if (q.date) revenueActualMap[q.date] = raw(q.revenue);
+      });
+
+      // Revenue + EPS estimates from earningsTrend, keyed by quarter-end date string (endDate)
+      // earningsTrend has periods like "0q", "+1q", "-1q" with endDate = quarter end date
+      const trendByEndDate = {};
+      (result.earningsTrend?.trend ?? []).forEach(t => {
+        if (t.endDate) {
+          trendByEndDate[t.endDate] = {
+            revenueEstimate: raw(t.revenueEstimate?.avg),
+            epsEstimate:     raw(t.earningsEstimate?.avg),
+          };
+        }
+      });
+
+      // EPS estimates from earnings.earningsChart.quarterly (historical EPS estimates stored)
+      const epsEstChartMap = {};
+      (result.earnings?.earningsChart?.quarterly ?? []).forEach(q => {
+        if (q.date) epsEstChartMap[q.date] = raw(q.estimate);
+      });
+
+      // Chart events keyed by timestamp — use dateFmt for actual announcement date
+      const chartEventsList = chartEvents ? Object.values(chartEvents) : [];
+
       const history = (result.earningsHistory?.history ?? [])
         .slice(-4)
-        .map(h => ({
-          period:          h.period ?? null,
-          date:            h.quarter ? new Date(raw(h.quarter) * 1000).toISOString().slice(0, 10) : null,
-          epsEstimate:     raw(h.epsEstimate),
-          epsActual:       raw(h.epsActual),
-          epsDifference:   raw(h.epsDifference),
-          surprisePct:     raw(h.surprisePercent),
-        }))
+        .map(h => {
+          const quarterTs = raw(h.quarter); // fiscal quarter end Unix timestamp
+          const quarterDate = quarterTs ? new Date(quarterTs * 1000).toISOString().slice(0, 10) : null;
+
+          // Find the chart earnings event closest in time to this quarter end (within 90 days)
+          let bestEv = null;
+          if (quarterTs && chartEventsList.length) {
+            const quarterMs = quarterTs * 1000;
+            let minDiff = Infinity;
+            chartEventsList.forEach(ev => {
+              const diff = Math.abs(ev.date * 1000 - quarterMs);
+              if (diff < minDiff && diff < 90 * 24 * 3600 * 1000) {
+                minDiff = diff;
+                bestEv = ev;
+              }
+            });
+          }
+
+          const period      = bestEv?.period ?? h.period ?? null;
+          const reportDate  = bestEv?.dateFmt ?? null;
+          const revenueActual  = period ? (revenueActualMap[period] ?? null) : null;
+
+          // Try to find revenue estimate: match trend by quarter endDate
+          const trendEntry     = quarterDate ? trendByEndDate[quarterDate] : null;
+          const revenueEstimate = trendEntry?.revenueEstimate ?? null;
+
+          // EPS estimate: prefer earningsHistory (analyst consensus before report),
+          // then earningsChart stored estimate, then trend
+          const epsEstimate = raw(h.epsEstimate)
+            ?? (period ? epsEstChartMap[period] : null)
+            ?? trendEntry?.epsEstimate
+            ?? null;
+
+          return {
+            period,
+            reportDate,
+            epsEstimate,
+            epsActual:       raw(h.epsActual),
+            epsDifference:   raw(h.epsDifference),
+            surprisePct:     raw(h.surprisePercent),
+            revenueEstimate,
+            revenueActual,
+          };
+        })
         .reverse(); // most recent first
 
-      // Next earnings date from calendarEvents
       const nextTs = result.calendarEvents?.earnings?.earningsDate?.[0];
       const nextDate = nextTs ? new Date(raw(nextTs) * 1000).toISOString().slice(0, 10) : null;
 
@@ -1243,5 +1327,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin(), xFeedPlugin(), newsAnalyzerPlugin()],
+    // Hosting platforms (Render, Azure App Service, Cloud Run) supply PORT
+    preview: { host: true, port: Number(process.env.PORT) || 4173, strictPort: true },
   };
 });

@@ -11,9 +11,10 @@ import { useTrades } from '../contexts/TradeContext';
 
 const DAYS        = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACCOUNTS    = ['Sakshi Account', 'Madhur Account'];
-const PROVIDERS   = ['Elite - Brando','Elite - Shoof','Banana','SniperAlert','Cole','SmartIRT','Lexington','GenZTrade','Stock PlayMaker (X)','Sam Parikh','Self'];
+const PROVIDERS   = ['Elite - Brando','Elite - Shoof','Banana','SniperAlert','Cole','SmartIRT','Lexington','GenZTrade','Stock PlayMaker (X)','Sam Parikh','Meta Muse','Self'];
 const TRADE_TYPES = ['Option', 'Stock'];
-const TAGS        = ['0DTE','Auto Expired','Stop Loss Hit','Take Profit Hit','Rolled Out','Early Exit','Earnings Play','Paper Trade','Closed at Open'];
+const TAGS             = ['Auto Expired','Stop Loss Hit','Take Profit Hit','Rolled Out','Early Exit','Earnings Play','Paper Trade','Closed at Open'];
+const DURATION_OPTIONS = ['0DTE','Within Week','1-2 Weeks','2-4 Weeks','4-8 Weeks','> 8 Weeks'];
 
 const today = () => format(new Date(), 'yyyy-MM-dd');
 const dayOf = (d) => d ? DAYS[new Date(d + 'T12:00:00').getDay()] : '';
@@ -118,7 +119,7 @@ function OpenTradeModal({ initial, onSubmit, onClose }) {
     symbol: '', tradeType: 'Option', optionCount: '1',
     buyDate: today(), buyDay: dayOf(today()),
     buyPrice: '', buyAmount: '',
-    account: '', serviceProvider: '', comments: '',
+    account: '', serviceProvider: '', duration: '', comments: '',
     ...initial,
   });
 
@@ -151,6 +152,7 @@ function OpenTradeModal({ initial, onSubmit, onClose }) {
       buyAmount:       parseFloat(f.buyAmount) || 0,
       account:         f.account,
       serviceProvider: f.serviceProvider,
+      duration:        f.duration,
       comments:        f.comments,
     });
     onClose();
@@ -165,6 +167,9 @@ function OpenTradeModal({ initial, onSubmit, onClose }) {
             onChange={e => set('symbol')({ target: { value: e.target.value.toUpperCase() } })} />
         </div>
         <Select label="Trade Type" options={TRADE_TYPES} value={f.tradeType} onChange={set('tradeType')} />
+        {f.tradeType === 'Option' && (
+          <Select label="Hold Duration" options={DURATION_OPTIONS} value={f.duration} onChange={set('duration')} placeholder="Select duration…" />
+        )}
         <Input label={f.tradeType === 'Stock' ? 'Share Count' : 'Contracts'} type="number" placeholder="1"
           value={f.optionCount} onChange={set('optionCount')} />
         <Select label="Account" options={ACCOUNTS} value={f.account} onChange={set('account')} />
@@ -201,7 +206,7 @@ function OpenTradeModal({ initial, onSubmit, onClose }) {
 
 function CloseTradeModal({ trade, onSubmit, onClose }) {
   const [f, setF] = useState({
-    sellDate: today(), sellPrice: '', sellAmount: '', comments: trade.comments || '',
+    sellDate: today(), sellPrice: '', sellAmount: '', duration: trade.duration || '', comments: trade.comments || '',
   });
 
   const set = (k) => (e) => {
@@ -233,6 +238,7 @@ function CloseTradeModal({ trade, onSubmit, onClose }) {
       pl:         parseFloat(pl.toFixed(2)),
       plPct:      parseFloat(plPct.toFixed(2)),
       holdDays:   holdDays,
+      duration:   f.duration,
       comments:   f.comments,
     });
     onClose();
@@ -294,6 +300,11 @@ function CloseTradeModal({ trade, onSubmit, onClose }) {
             </div>
           </div>
         </div>
+      )}
+
+      {trade.tradeType === 'Option' && (
+        <Select label="Hold Duration" options={DURATION_OPTIONS} value={f.duration}
+          onChange={e => setF(p => ({ ...p, duration: e.target.value }))} placeholder="Select duration…" />
       )}
 
       <TagChips value={f.comments} onChange={v => setF(p => ({ ...p, comments: v }))} />
@@ -394,6 +405,7 @@ function EditClosedTradeModal({ trade, onSubmit, onClose }) {
     sellAmount:      String(trade.sellAmount|| ''),
     account:         trade.account         || '',
     serviceProvider: trade.serviceProvider || '',
+    duration:        trade.duration        || '',
     comments:        trade.comments        || '',
   });
 
@@ -438,6 +450,7 @@ function EditClosedTradeModal({ trade, onSubmit, onClose }) {
       holdDays:        hd,
       account:         f.account,
       serviceProvider: f.serviceProvider,
+      duration:        f.duration,
       comments:        f.comments,
     });
     onClose();
@@ -455,6 +468,9 @@ function EditClosedTradeModal({ trade, onSubmit, onClose }) {
             onChange={e => set('symbol')({ target: { value: e.target.value.toUpperCase() } })} />
         </div>
         <Select label="Trade Type" options={TRADE_TYPES} value={f.tradeType} onChange={set('tradeType')} />
+        {f.tradeType === 'Option' && (
+          <Select label="Hold Duration" options={DURATION_OPTIONS} value={f.duration} onChange={set('duration')} placeholder="Select duration…" />
+        )}
         <Input label={f.tradeType === 'Stock' ? 'Share Count' : 'Contracts'} type="number" placeholder="1"
           value={f.optionCount} onChange={set('optionCount')} />
         <Select label="Account" options={ACCOUNTS} value={f.account} onChange={set('account')} />

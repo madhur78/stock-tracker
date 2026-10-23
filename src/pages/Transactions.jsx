@@ -75,6 +75,7 @@ export default function Transactions() {
     { key: '_days',    label: 'Days', noSort: true },
     { key: 'symbol',   label: 'Symbol' },
     { key: 'optionCount', label: 'Contracts' },
+    { key: 'duration',   label: 'Duration', noSort: true },
     { key: 'buyAmount',  label: 'Buy Amt' },
     { key: 'sellAmount', label: 'Sell Amt' },
     { key: 'pl',         label: 'P/L' },
@@ -157,6 +158,11 @@ export default function Transactions() {
                     </td>
                     <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">{t.symbol}</td>
                     <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{t.optionCount || '—'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {t.duration
+                        ? <span className="text-xs font-medium bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-full">{t.duration}</span>
+                        : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                    </td>
                     <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{fmt(t.buyAmount)}</td>
                     <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{fmt(t.sellAmount)}</td>
                     <td className={`px-4 py-3 font-semibold ${pl >= 0 ? 'text-green-600' : 'text-red-500'}`}>{fmt(pl)}</td>

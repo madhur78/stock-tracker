@@ -1,0 +1,17 @@
+# Render Blueprint — free web service running the built app via `vite preview`,
+# which also serves the /api/* proxy endpoints defined in vite.config.js.
+services:
+  - type: web
+    name: stock-tracker
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TWITTER_BEARER_TOKEN
+        sync: false
