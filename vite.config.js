@@ -219,6 +219,53 @@ function yahooFinancePlugin() {
     return json?.quoteResponse?.result ?? [];
   }
 
+  // ── Yahoo Finance v8 chart fallback (no crumb needed, works from cloud IPs) ──
+
+  async function fetchChartQuote(symbol) {
+    try {
+      const r = await nodeRequest(
+        `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`,
+        { headers: { Accept: 'application/json' } },
+      );
+      if (r.status !== 200) return null;
+
+      const m = JSON.parse(r.body)?.chart?.result?.[0]?.meta;
+      if (!m?.regularMarketPrice) return null;
+
+      const price     = m.regularMarketPrice;
+      const prevClose = m.chartPreviousClose ?? m.previousClose ?? null;
+      const change    = prevClose ? price - prevClose : 0;
+
+      return {
+        symbol,
+        shortName: m.shortName ?? m.longName ?? null,
+        regularMarketPrice:           price,
+        regularMarketChange:          change,
+        regularMarketChangePercent:   prevClose ? (change / prevClose) * 100 : 0,
+        regularMarketOpen:            null,
+        regularMarketDayHigh:         m.regularMarketDayHigh ?? null,
+        regularMarketDayLow:          m.regularMarketDayLow ?? null,
+        regularMarketPreviousClose:   prevClose,
+        regularMarketVolume:          m.regularMarketVolume ?? null,
+        marketCap:                    null,
+        fiftyTwoWeekHigh:             m.fiftyTwoWeekHigh ?? null,
+        fiftyTwoWeekLow:              m.fiftyTwoWeekLow ?? null,
+        _source: 'yahoo-chart',
+      };
+    } catch (e) {
+      console.warn(`[market] chart ${symbol}:`, e.message);
+      return null;
+    }
+  }
+
+  async function fetchChartBatch(symbols) {
+    const results = [];
+    for (let i = 0; i < symbols.length; i += 5) {
+      results.push(...await Promise.all(symbols.slice(i, i + 5).map(fetchChartQuote)));
+    }
+    return results.filter(Boolean);
+  }
+
   // ── stooq.com fallback ─────────────────────────────────────────────────────
 
   // Symbol mapping: Yahoo Finance format → stooq format
@@ -316,6 +363,13 @@ function yahooFinancePlugin() {
         console.log(`[market] Yahoo Finance: ${results.length}/${symbols.length} symbols`);
         return results;
       }
+    }
+
+    // Fallback to the crumb-less chart API
+    const chartResults = await fetchChartBatch(symbols);
+    if (chartResults.length > 0) {
+      console.log(`[market] Yahoo chart fallback: ${chartResults.length}/${symbols.length} symbols`);
+      return chartResults;
     }
 
     // Fallback to stooq
@@ -1322,12 +1376,15 @@ export default defineConfig(({ mode }) => {
   // plugin code. Explicitly bridge the gap so all API keys are available in
   // configureServer middleware at request time.
   const env = loadEnv(mode, process.cwd(), '');
-  process.env.ANTHROPIC_API_KEY    ??= env.ANTHROPIC_API_KEY;
-  process.env.TWITTER_BEARER_TOKEN ??= env.TWITTER_BEARER_TOKEN;
+  // Assigning undefined to process.env stores the string "undefined", so only copy real values
+  for (const key of ['ANTHROPIC_API_KEY', 'TWITTER_BEARER_TOKEN']) {
+    if (!process.env[key] && env[key]) process.env[key] = env[key];
+  }
 
   return {
     plugins: [react(), yahooFinancePlugin(), newsPlugin(), historyPlugin(), usagePlugin(), xFeedPlugin(), newsAnalyzerPlugin()],
     // Hosting platforms (Render, Azure App Service, Cloud Run) supply PORT
-    preview: { host: true, port: Number(process.env.PORT) || 4173, strictPort: true },
+    // allowedHosts: true lets the platform's domain (e.g. *.onrender.com) through Vite's host check
+    preview: { host: true, port: Number(process.env.PORT) || 4173, strictPort: true, allowedHosts: true },
   };
 });
