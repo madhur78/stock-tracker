@@ -706,12 +706,585 @@ function yahooFinancePlugin() {
     }
   }
 
+  // ── Normal CDF / PDF for Black-Scholes ────────────────────────────────────
+  function normalCDF(x) {
+    const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+    const sign = x < 0 ? -1 : 1;
+    x = Math.abs(x) / Math.sqrt(2);
+    const t = 1 / (1 + p * x);
+    const y = 1 - (((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+    return 0.5 * (1 + sign * y);
+  }
+  function normalPDF(x) { return Math.exp(-0.5*x*x) / Math.sqrt(2*Math.PI); }
+  function bsGreeks(S, K, T, r, sigma, type) {
+    if (T <= 0 || sigma <= 0 || S <= 0 || K <= 0) return null;
+    const sqrtT = Math.sqrt(T);
+    const d1 = (Math.log(S/K) + (r + sigma*sigma/2)*T) / (sigma*sqrtT);
+    const d2 = d1 - sigma*sqrtT;
+    const Nd1=normalCDF(d1), Nd2=normalCDF(d2), nPd1=normalPDF(d1);
+    const price = type==='call' ? S*Nd1 - K*Math.exp(-r*T)*Nd2 : K*Math.exp(-r*T)*normalCDF(-d2) - S*normalCDF(-d1);
+    const delta = type==='call' ? Nd1 : Nd1-1;
+    const gamma = nPd1/(S*sigma*sqrtT);
+    const theta = ((-S*nPd1*sigma/(2*sqrtT)) - r*K*Math.exp(-r*T)*(type==='call'?Nd2:normalCDF(-d2)))/365;
+    const vega  = S*sqrtT*nPd1/100;
+    const round = (v,d) => Math.round(v*Math.pow(10,d))/Math.pow(10,d);
+    return { price:round(price,2), delta:round(delta,3), gamma:round(gamma,4), theta:round(theta,3), vega:round(vega,3) };
+  }
+
+  async function tradeCompassHandler(req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    const p      = new URL(req.url, 'http://localhost');
+    const symbol = p.searchParams.get('symbol')?.trim().toUpperCase();
+    if (!symbol) { res.writeHead(400); res.end(JSON.stringify({ error: 'symbol required' })); return; }
+
+    try {
+      // 1. Fetch 1-year daily price history
+      // ── Fetch all data in parallel ──────────────────────────────────────────
+      const hdr = { Accept: 'application/json' };
+      const [chartRes, intradayRes, spxRes, qqqRes] = await Promise.allSettled([
+        nodeRequest(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`, { headers: hdr }),
+        nodeRequest(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m`, { headers: hdr }),
+        nodeRequest(`https://query2.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=1d&interval=1d`, { headers: hdr }),
+        nodeRequest(`https://query2.finance.yahoo.com/v8/finance/chart/QQQ?range=1d&interval=1d`, { headers: hdr }),
+      ]);
+
+      const dailyRes = chartRes.status === 'fulfilled' ? chartRes.value : null;
+      if (!dailyRes || dailyRes.status !== 200) throw new Error(`Chart API returned ${dailyRes?.status ?? 'error'}`);
+
+      const chartJson   = JSON.parse(dailyRes.body);
+      const chartResult = chartJson?.chart?.result?.[0];
+      if (!chartResult) throw new Error('No chart data returned');
+
+      const meta       = chartResult.meta ?? {};
+      const q          = chartResult.indicators?.quote?.[0] ?? {};
+      const rawCloses  = q.close   ?? [];
+      const rawHighs   = q.high    ?? [];
+      const rawLows    = q.low     ?? [];
+      const rawVolumes = q.volume  ?? [];
+
+      // Strip null entries (non-trading days in the series)
+      const closes  = rawCloses.filter(v => v != null);
+      const highs   = rawHighs.filter(v => v != null);
+      const lows    = rawLows.filter(v => v != null);
+      const volumes = rawVolumes.filter(v => v != null);
+
+      if (closes.length < 20) throw new Error('Insufficient price history');
+
+      const currentPrice = meta.regularMarketPrice ?? closes.at(-1);
+      const prevClose    = meta.chartPreviousClose  ?? closes.at(-2) ?? currentPrice;
+      const change       = currentPrice - prevClose;
+      const changePct    = (change / prevClose) * 100;
+
+      // ── Technical helpers ──────────────────────────────────────────────────
+      const sma = (arr, n) => arr.length < n ? null : arr.slice(-n).reduce((a,b)=>a+b,0)/n;
+
+      function calcRSI(arr, n=14) {
+        if (arr.length < n+1) return null;
+        const slice = arr.slice(-(n*2+1));
+        let g=0, l=0;
+        for (let i=1; i<=n; i++) { const d=slice[i]-slice[i-1]; d>0?g+=d/n:l-=d/n; }
+        for (let i=n+1; i<slice.length; i++) {
+          const d=slice[i]-slice[i-1];
+          g=(g*(n-1)+(d>0?d:0))/n; l=(l*(n-1)+(d<0?-d:0))/n;
+        }
+        return l===0 ? 100 : 100-(100/(1+g/l));
+      }
+
+      function calcBB(arr, n=20) {
+        if (arr.length < n) return null;
+        const sl=arr.slice(-n), mid=sl.reduce((a,b)=>a+b,0)/n;
+        const std=Math.sqrt(sl.reduce((s,v)=>s+Math.pow(v-mid,2),0)/n);
+        return { upper:mid+2*std, middle:mid, lower:mid-2*std };
+      }
+
+      function calcATR(h, l, c, n=14) {
+        const trs=[];
+        for (let i=1; i<Math.min(h.length,l.length,c.length); i++)
+          trs.push(Math.max(h[i]-l[i], Math.abs(h[i]-c[i-1]), Math.abs(l[i]-c[i-1])));
+        return trs.length < n ? null : trs.slice(-n).reduce((a,b)=>a+b,0)/n;
+      }
+
+      const sma20  = sma(closes, 20);
+      const sma50  = sma(closes, 50);
+      const sma200 = sma(closes, 200);
+      const rsi    = calcRSI(closes);
+      const bb     = calcBB(closes);
+      const atr    = calcATR(highs, lows, closes);
+
+      const r2 = (v) => Math.round(v*100)/100;
+
+      // Trend: score how many signals are bullish
+      let bull=0, bear=0;
+      if (sma20  && currentPrice > sma20)  bull++; else bear++;
+      if (sma50  && currentPrice > sma50)  bull++; else bear++;
+      if (sma200 && currentPrice > sma200) bull++; else bear++;
+      if (sma20  && sma50 && sma20 > sma50) bull++; else bear++;
+
+      const trend  = bull >= 3 ? 'bullish' : bear >= 3 ? 'bearish' : 'neutral';
+      const trendStrength = (bull===4||bear===4) ? 'strong' : (bull===3||bear===3) ? 'moderate' : 'weak';
+      const rsiSignal = !rsi ? 'neutral' : rsi < 30 ? 'oversold' : rsi > 70 ? 'overbought' : 'neutral';
+
+      let bbPos = 'middle';
+      if (bb) {
+        if (currentPrice >= bb.upper*0.98) bbPos = 'upper';
+        else if (currentPrice <= bb.lower*1.02) bbPos = 'lower';
+      }
+
+      // ── Support & Resistance from pivot highs/lows ─────────────────────────
+      const lookback = Math.min(closes.length, 63); // ~3 months
+      const rH = highs.slice(-lookback), rL = lows.slice(-lookback);
+
+      function pivots(arr, fn, w=5) {
+        const out=[];
+        for (let i=w; i<arr.length-w; i++) {
+          const sl=arr.slice(i-w, i+w+1);
+          if (arr[i]===fn(...sl)) out.push(arr[i]);
+        }
+        return out;
+      }
+
+      function cluster(levels, pct=0.015) {
+        const sorted=[...new Set(levels.map(v=>Math.round(v*100)/100))].sort((a,b)=>a-b);
+        const out=[];
+        for (const v of sorted) {
+          const ex=out.find(c=>Math.abs(c-v)/c<pct);
+          ex!==undefined ? out[out.indexOf(ex)]=(ex+v)/2 : out.push(v);
+        }
+        return out;
+      }
+
+      const pLows  = pivots(rL, Math.min);
+      const pHighs = pivots(rH, Math.max);
+
+      const supports = cluster(pLows)
+        .filter(s=>s<currentPrice).sort((a,b)=>b-a).slice(0,3).map(r2);
+      const resistances = cluster(pHighs)
+        .filter(r=>r>currentPrice).sort((a,b)=>a-b).slice(0,3).map(r2);
+
+      // Add 52-week extremes if not already represented
+      const w52H = r2(meta.fiftyTwoWeekHigh ?? Math.max(...highs));
+      const w52L = r2(meta.fiftyTwoWeekLow  ?? Math.min(...lows));
+      if (w52H > currentPrice && !resistances.some(r=>Math.abs(r-w52H)/w52H<0.02)) resistances.push(w52H);
+      if (w52L < currentPrice && !supports.some(s=>Math.abs(s-w52L)/w52L<0.02))    supports.push(w52L);
+      resistances.sort((a,b)=>a-b); supports.sort((a,b)=>b-a);
+
+      // ── Volume ────────────────────────────────────────────────────────────
+      const recentVols = volumes.slice(-20);
+      const avgVol     = recentVols.reduce((a,b)=>a+b,0)/recentVols.length;
+      const curVol     = meta.regularMarketVolume ?? volumes.at(-1) ?? 0;
+      const volRatio   = avgVol ? curVol/avgVol : 1;
+
+      // ── Yesterday's OHLC (second-to-last daily bar) ────────────────────────
+      const yH = r2(highs.at(-2)  ?? currentPrice);
+      const yL = r2(lows.at(-2)   ?? currentPrice);
+      const yC = r2(closes.at(-2) ?? currentPrice);
+
+      // ── Today's candle analysis ────────────────────────────────────────────
+      const todayH    = r2(meta.regularMarketDayHigh ?? currentPrice);
+      const todayL    = r2(meta.regularMarketDayLow  ?? currentPrice);
+      const dayRange  = r2(todayH - todayL);
+      const bodyHigh  = Math.max(currentPrice, prevClose);
+      const bodyLow   = Math.min(currentPrice, prevClose);
+      const bodySize  = r2(bodyHigh - bodyLow);
+      const upperWick = r2(todayH - bodyHigh);
+      const lowerWick = r2(bodyLow - todayL);
+      const bounceAmt = r2(currentPrice - todayL);
+      const bounceFromLowPct = dayRange > 0 ? r2((currentPrice - todayL) / dayRange * 100) : 50;
+      // close position: upper (> 66%), middle (33–66%), lower (< 33%)
+      const closePosition = bounceFromLowPct > 66 ? 'upper' : bounceFromLowPct < 33 ? 'lower' : 'middle';
+      // Candle patterns
+      const hasLongLowerWick = lowerWick > bodySize * 1.5 && lowerWick > dayRange * 0.25;
+      const hasLongUpperWick = upperWick > bodySize * 1.5 && upperWick > dayRange * 0.25;
+      const isHammer         = hasLongLowerWick && bodySize < dayRange * 0.35 && currentPrice >= bodyLow;
+      const isDoji           = bodySize < dayRange * 0.1;
+      const isGreenCandle    = currentPrice > prevClose;
+      // Higher high / higher low vs yesterday
+      const isHigherHigh = todayH > yH;
+      const isHigherLow  = todayL > yL;
+      const isLowerHigh  = todayH < yH;
+      const isLowerLow   = todayL < yL;
+
+      // ── VWAP from intraday 5-min data ──────────────────────────────────────
+      let vwap = null;
+      let isAboveVWAP = null;
+      try {
+        const intraRes = intradayRes.status === 'fulfilled' ? intradayRes.value : null;
+        if (intraRes?.status === 200) {
+          const intraJson = JSON.parse(intraRes.body);
+          const intraQ    = intraJson?.chart?.result?.[0]?.indicators?.quote?.[0] ?? {};
+          const iH = intraQ.high   ?? [], iL = intraQ.low ?? [], iC = intraQ.close ?? [], iV = intraQ.volume ?? [];
+          let sumPV = 0, sumV = 0;
+          for (let i = 0; i < iC.length; i++) {
+            if (iC[i]!=null && iV[i]!=null && iV[i]>0) {
+              const tp = (((iH[i]??iC[i]) + (iL[i]??iC[i]) + iC[i]) / 3);
+              sumPV += tp * iV[i]; sumV += iV[i];
+            }
+          }
+          if (sumV > 0) { vwap = r2(sumPV / sumV); isAboveVWAP = currentPrice >= vwap; }
+        }
+      } catch(_) {}
+
+      // ── SPX / QQQ market context ──────────────────────────────────────────
+      let marketCtx = null;
+      try {
+        const spxVal = spxRes.status === 'fulfilled' ? spxRes.value : null;
+        const qqqVal = qqqRes.status === 'fulfilled' ? qqqRes.value : null;
+        const spxMeta = spxVal?.status===200 ? JSON.parse(spxVal.body)?.chart?.result?.[0]?.meta : null;
+        const qqqMeta = qqqVal?.status===200 ? JSON.parse(qqqVal.body)?.chart?.result?.[0]?.meta : null;
+        const spxChg = spxMeta ? r2((spxMeta.regularMarketPrice - (spxMeta.chartPreviousClose??spxMeta.regularMarketPrice)) / (spxMeta.chartPreviousClose??spxMeta.regularMarketPrice) * 100) : null;
+        const qqqChg = qqqMeta ? r2((qqqMeta.regularMarketPrice - (qqqMeta.chartPreviousClose??qqqMeta.regularMarketPrice)) / (qqqMeta.chartPreviousClose??qqqMeta.regularMarketPrice) * 100) : null;
+        const mktAvg = (spxChg!=null && qqqChg!=null) ? (spxChg+qqqChg)/2 : (spxChg??qqqChg);
+        const relStr = mktAvg!=null ? (changePct > mktAvg+0.3 ? 'stronger' : changePct < mktAvg-0.3 ? 'weaker' : 'inline') : null;
+        const mktTrend = mktAvg==null ? 'unknown' : mktAvg > 0.3 ? 'up' : mktAvg < -0.3 ? 'down' : 'flat';
+        marketCtx = {
+          spxChangePct: spxChg, qqqChangePct: qqqChg, mktAvgPct: mktAvg!=null?r2(mktAvg):null,
+          relativeStrength: relStr, marketTrend: mktTrend,
+          marketFalling: mktAvg!=null && mktAvg < -1.0,
+          marketRallying: mktAvg!=null && mktAvg > 0.5,
+        };
+      } catch(_) {}
+
+      // ── Dip-buying verdict ────────────────────────────────────────────────
+      const dipFor = []; const dipAgainst = [];
+
+      // Close position
+      if (closePosition==='upper') dipFor.push("Closed in upper 1/3 of day's range — buyers won the session");
+      else if (closePosition==='lower') dipAgainst.push("Closed in lower 1/3 of day's range — sellers in control");
+      else { dipFor.push('Closed in middle of range — partial recovery'); dipAgainst.push('No clear winner yet — neither bulls nor bears committed'); }
+
+      // Candle shape
+      if (isHammer)          dipFor.push('Hammer candle — long lower wick shows buyers stepped in at the low');
+      else if (hasLongLowerWick) dipFor.push('Long lower shadow — price tested lower, buyers pushed it back');
+      if (hasLongUpperWick && !isHammer) dipAgainst.push('Long upper wick — sellers rejected the rally at the top');
+      if (isDoji && closePosition!=='upper') dipAgainst.push('Doji candle — indecision, neither side committed');
+
+      // VWAP
+      if (isAboveVWAP===true)  dipFor.push('Price above VWAP — buyers are winning the intraday average');
+      else if (isAboveVWAP===false) dipAgainst.push('Price below VWAP — sellers have the intraday edge');
+
+      // Higher high / higher low
+      if (isHigherHigh && isHigherLow) dipFor.push(`Higher high ($${todayH} > $${yH}) and higher low ($${todayL} > $${yL}) vs yesterday — uptrend continues`);
+      else if (isLowerHigh && isLowerLow) dipAgainst.push(`Lower high ($${todayH} < $${yH}) and lower low ($${todayL} < $${yL}) — downtrend intensifying`);
+      else if (isHigherLow && isLowerHigh) dipFor.push(`Higher low ($${todayL} > $${yL}) — buyers defending higher levels`);
+      else if (isLowerLow && isHigherHigh) dipAgainst.push(`Lower low ($${todayL} < $${yL}) tested despite new high — unstable`);
+
+      // Market relative strength
+      if (marketCtx?.relativeStrength==='stronger') dipFor.push(`Outperforming market (${changePct>0?'+':''}${r2(changePct)}% vs market ${marketCtx.mktAvgPct>0?'+':''}${marketCtx.mktAvgPct}%) — institutional buying`);
+      else if (marketCtx?.relativeStrength==='weaker') dipAgainst.push(`Underperforming market (${r2(changePct)}% vs market ${r2(marketCtx.mktAvgPct)}%) — relative weakness`);
+
+      // Volume
+      if (volRatio > 1.3 && isGreenCandle)       dipFor.push(`${r2(volRatio)}× average volume on a bullish day — conviction buying`);
+      else if (volRatio > 1.3 && !isGreenCandle)  dipAgainst.push(`${r2(volRatio)}× average volume on a red day — conviction selling`);
+      else if (volRatio < 0.7 && !isGreenCandle)  dipFor.push('Low volume on down day — no panic selling, dip may hold');
+
+      // RSI / Bollinger
+      if (rsiSignal==='oversold')   dipFor.push(`RSI ${r2(rsi)} — deeply oversold, historically bounces from here`);
+      if (bbPos==='lower')          dipFor.push('Price at lower Bollinger Band — mean-reversion likely');
+      if (rsiSignal==='overbought') dipAgainst.push(`RSI ${r2(rsi)} — overbought, momentum may stall`);
+
+      // Support proximity
+      const nearestSupport = supports[0];
+      const distFromSup = nearestSupport ? r2((currentPrice-nearestSupport)/nearestSupport*100) : null;
+      if (distFromSup!==null && distFromSup < 2) dipFor.push(`Price within ${distFromSup}% of key support $${nearestSupport} — classic dip-buy zone`);
+
+      // Verdict
+      const fCount = dipFor.length, aCount = dipAgainst.length;
+      const dipVerdict = fCount >= 3 && aCount <= 1 ? 'YES'
+                       : fCount >= 2 && aCount <= 2 ? 'PARTLY'
+                       : aCount >= 3 ? 'NO' : 'UNCLEAR';
+      const isDip = dipVerdict === 'YES' || (dipVerdict === 'PARTLY' && trend === 'bullish');
+
+      // ── Trade setup ───────────────────────────────────────────────────────
+      let conf = 50;
+      if (trend==='bullish') conf += 15*(bull-2);
+      else if (trend==='bearish') conf += 15*(bear-2);
+      if (rsiSignal==='oversold'  && trend==='bullish') conf += 10;
+      if (rsiSignal==='overbought'&& trend==='bearish') conf += 10;
+      if (dipVerdict==='YES'      && trend==='bullish') conf += 8;
+      if (marketCtx?.relativeStrength==='stronger')     conf += 5;
+      if (marketCtx?.marketFalling)                     conf -= 15; // market headwind
+      conf = Math.max(25, Math.min(90, conf));
+
+      const entryZone = atr ? [r2(currentPrice-atr*0.5), r2(currentPrice)] : null;
+      const targetPrice = r2(resistances[0] ?? currentPrice*1.05);
+      const stopLoss = atr ? r2(currentPrice-atr*2) : (supports[0] ? r2(supports[0]*0.98) : null);
+      const riskReward = (targetPrice&&stopLoss&&entryZone) ?
+        r2((targetPrice-entryZone[1]) / (entryZone[1]-stopLoss)) : null;
+
+      const rationale = [];
+      if (sma20  && currentPrice>sma20)  rationale.push(`Price above SMA 20 ($${r2(sma20)})`);
+      if (sma50  && currentPrice>sma50)  rationale.push(`Price above SMA 50 ($${r2(sma50)})`);
+      if (sma200 && currentPrice>sma200) rationale.push(`Price above SMA 200 ($${r2(sma200)})`);
+      if (sma20  && currentPrice<sma20)  rationale.push(`Price below SMA 20 ($${r2(sma20)}) — bearish pressure`);
+      if (sma50  && currentPrice<sma50)  rationale.push(`Price below SMA 50 ($${r2(sma50)}) — bearish pressure`);
+      if (rsi) rationale.push(rsiSignal==='oversold'?`RSI ${r2(rsi)} — oversold, watch for bounce`:rsiSignal==='overbought'?`RSI ${r2(rsi)} — overbought, watch for pullback`:`RSI ${r2(rsi)} — neutral momentum`);
+      if (dipFor.length) rationale.push(dipFor[0]);
+
+      // ── Analyst's Call ────────────────────────────────────────────────────
+      // Use nearest near-term levels: prefer today's high/low (most actionable)
+      const nearWatchAbove = (() => {
+        const cands = [todayH, yH, ...resistances].filter(v=>v>currentPrice).sort((a,b)=>a-b);
+        return cands[0] ?? null;
+      })();
+      const nearWatchBelow = (() => {
+        const cands = [todayL, yL, vwap, ...supports].filter(v=>v!=null&&v<currentPrice).sort((a,b)=>b-a);
+        return cands[0] ?? null;
+      })();
+      let traderVerdict, traderPoints = [], watchAbove = nearWatchAbove, watchBelow = nearWatchBelow;
+
+      if (marketCtx?.marketFalling) {
+        traderVerdict = 'NO_TRADE';
+        traderPoints.push(`Market (SPX) is falling hard (${marketCtx.spxChangePct}%) — most stocks follow, avoid new longs`);
+        if (trend==='bullish') traderPoints.push('Even in an uptrend, fighting a falling market costs you money');
+        traderPoints.push(`Wait: re-evaluate if SPX stabilizes or this stock holds above $${watchBelow}`);
+      } else if (trend==='bullish' && dipVerdict==='YES' && rsiSignal!=='overbought') {
+        traderVerdict = 'BUY';
+        traderPoints.push(`Uptrend intact (above SMA 50/200) and dip is clearly being bought`);
+        if (vwap && isAboveVWAP) traderPoints.push(`Price is above VWAP ($${vwap}) — intraday buyers in control`);
+        if (isHammer) traderPoints.push('Hammer candle confirms buyers stepped in at the low');
+        traderPoints.push(`Entry zone $${entryZone?entryZone[0]:currentPrice}–$${entryZone?entryZone[1]:currentPrice}, target $${targetPrice}, stop $${stopLoss}`);
+        if (riskReward) traderPoints.push(`Risk/reward = 1:${riskReward} — worth taking if thesis holds`);
+      } else if (trend==='bearish' && dipVerdict==='NO') {
+        traderVerdict = 'NO_TRADE';
+        traderPoints.push('Downtrend + dip is a real breakdown, not a buying opportunity');
+        traderPoints.push(`No long trades. Watch if sellers hold below $${watchAbove} (bearish) or price recovers above $${watchBelow} (potential reversal)`);
+      } else if (rsiSignal==='overbought' && closePosition==='upper') {
+        traderVerdict = 'WAIT';
+        traderPoints.push(`RSI ${r2(rsi)} is overbought and price closed near the highs — chasing here is dangerous`);
+        traderPoints.push(`Wait for a pullback to $${watchBelow ?? r2(currentPrice*0.97)} before entering`);
+      } else {
+        traderVerdict = 'WAIT';
+        // Give Muse-style context based on the specific situation
+        if (dipVerdict==='PARTLY') {
+          traderPoints.push(`Price closed in the middle of its range — buyers and sellers are equal, no clear winner today`);
+          traderPoints.push(`Partial dip recovery: bounced $${bounceAmt} off the low but couldn't hold near the high`);
+        } else {
+          traderPoints.push('Signals are mixed — no clear entry edge right now');
+        }
+        if (watchAbove) traderPoints.push(`Watch $${watchAbove} above: a close above it = first sign buyers are winning`);
+        if (watchBelow) traderPoints.push(`Watch $${watchBelow} below: a close below = sellers in control, stay out or cut losses`);
+        const biggerTrend = trend==='bullish' ? `Bigger picture: uptrend intact (SMA 50/200)` : trend==='bearish' ? `Bigger picture: downtrend — dips are sells, not buys` : `Bigger picture: range-bound — buy support, sell resistance`;
+        traderPoints.push(biggerTrend);
+      }
+
+      const dipSignals = dipFor.slice(0, 3);
+
+      // ── Options chain (3 tabs: 0DTE · Short Term · LEAP) ─────────────────────
+      let optionsData = null;
+      try {
+        async function fetchOptions(url, sess=null) {
+          const crumbParam = sess?.crumb ? `${url.includes('?')?'&':'?'}crumb=${encodeURIComponent(sess.crumb)}` : '';
+          return nodeRequest(url + crumbParam, {
+            headers: { Accept: 'application/json', Referer: 'https://finance.yahoo.com/',
+              ...(sess?.cookies ? { Cookie: sess.cookies } : {}) }
+          });
+        }
+
+        let optRes = await fetchOptions(`https://query2.finance.yahoo.com/v7/finance/options/${encodeURIComponent(symbol)}`);
+        if (optRes.status !== 200) {
+          const sess = await getYFSession();
+          if (sess) optRes = await fetchOptions(`https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(symbol)}`, sess);
+        }
+
+        if (optRes.status === 200) {
+          const optJson  = JSON.parse(optRes.body);
+          const optResult = optJson?.optionChain?.result?.[0];
+          if (optResult) {
+            const expDates = optResult.expirationDates ?? [];
+            const nearest  = optResult.options?.[0] ?? {};
+            const expTs0   = nearest.expirationDate;
+            const calls0   = nearest.calls ?? [];
+            const puts0    = nearest.puts  ?? [];
+
+            // IV from nearest ATM call
+            const atmC0 = calls0.reduce((b,c)=>!b||Math.abs(c.strike-currentPrice)<Math.abs(b.strike-currentPrice)?c:b, null);
+            const rawIV  = atmC0?.impliedVolatility ?? null;
+            const ivSignal = !rawIV ? 'unknown' : rawIV<0.2?'low':rawIV>0.4?'high':'normal';
+
+            // ── Find the 3 target expiry timestamps ───────────────────────
+            const dteFn = ts => Math.round((ts*1000-Date.now())/(864e5));
+            // 0DTE: nearest (≤2 days)
+            const zeroDTEts = expDates.find(ts=>dteFn(ts)<=2) ?? expDates[0] ?? expTs0;
+            // Short term: first within 25-55 DTE, fallback to 14-90
+            const shortTs = expDates.find(ts=>{const d=dteFn(ts);return d>=25&&d<=55;})
+                         ?? expDates.find(ts=>{const d=dteFn(ts);return d>=14&&d<=90;});
+            // LEAP: first ≥180 DTE, fallback ≥120 DTE
+            const leapTs  = expDates.find(ts=>dteFn(ts)>=180)
+                         ?? expDates.find(ts=>dteFn(ts)>=120);
+
+            // ── Fetch the unique expiries we don't already have ───────────
+            const needFetch = [...new Set([zeroDTEts, shortTs, leapTs]
+              .filter(ts=>ts!=null&&ts!==expTs0))];
+            const fetchedChains = { [expTs0]: { calls: calls0, puts: puts0 } };
+
+            await Promise.allSettled(needFetch.map(async ts => {
+              try {
+                const rr = await fetchOptions(`https://query2.finance.yahoo.com/v7/finance/options/${encodeURIComponent(symbol)}?date=${ts}`);
+                if (rr.status===200) {
+                  const jj  = JSON.parse(rr.body);
+                  const opt = jj?.optionChain?.result?.[0]?.options?.[0] ?? {};
+                  fetchedChains[ts] = { calls: opt.calls??[], puts: opt.puts??[] };
+                }
+              } catch(_) {}
+            }));
+
+            // ── Build strike list for a given expiry + type ───────────────
+            const RF = 0.045;
+            function strikeFor(ts, type, targets) {
+              if (!ts || !fetchedChains[ts]) return [];
+              const arr = type==='call' ? fetchedChains[ts].calls : fetchedChains[ts].puts;
+              if (!arr.length) return [];
+              const dte = Math.max(dteFn(ts), 1);
+              const T   = dte / 365;
+              const seen = new Set();
+              return targets
+                .map(tgt => arr.slice().sort((a,b)=>Math.abs(a.strike-tgt)-Math.abs(b.strike-tgt))[0])
+                .filter(o => { if(!o||seen.has(o.strike)) return false; seen.add(o.strike); return true; })
+                .map(opt => {
+                  const bs   = rawIV ? bsGreeks(currentPrice, opt.strike, dte/365, RF, rawIV, type) : null;
+                  const dist = (opt.strike - currentPrice) / currentPrice * 100;
+                  const absD = Math.abs(dist);
+                  const label = absD < 1.5 ? 'ATM'
+                    : type==='call' ? (dist>0 ? `+${dist.toFixed(0)}% OTM` : `${absD.toFixed(0)}% ITM`)
+                    : (dist<0 ? `${absD.toFixed(0)}% OTM` : `${dist.toFixed(0)}% ITM`);
+                  return {
+                    type, strike: opt.strike,
+                    expiry: new Date(ts*1000).toISOString().slice(0,10), dte,
+                    bid: opt.bid??0, ask: opt.ask??0,
+                    iv:    opt.impliedVolatility ? r2(opt.impliedVolatility) : (rawIV ? r2(rawIV) : null),
+                    delta: opt.delta ? r2(opt.delta) : (bs?.delta ?? null),
+                    theta: opt.theta ? r2(opt.theta) : (bs?.theta ?? null),
+                    gamma: opt.gamma ? r2(opt.gamma) : (bs?.gamma ?? null),
+                    bsPrice: bs?.price ?? null,
+                    volume: opt.volume??0, openInterest: opt.openInterest??0,
+                    inTheMoney: opt.inTheMoney??false, label,
+                  };
+                });
+            }
+
+            const optType = trend==='bearish' ? 'put' : 'call';
+
+            // 0DTE: ATM only (OTM 0DTE is pure lottery)
+            const zStrikes = strikeFor(zeroDTEts, optType, [currentPrice]);
+            // Short term: ATM + 5% OTM
+            const sOTM = optType==='call' ? currentPrice*1.05 : currentPrice*0.95;
+            const sStrikes = strikeFor(shortTs, optType, [currentPrice, sOTM]);
+            // LEAP: 5% ITM + ATM (stock replacement range)
+            const lITM = optType==='call' ? currentPrice*0.95 : currentPrice*1.05;
+            const lStrikes = strikeFor(leapTs, optType, [lITM, currentPrice]);
+
+            // ── Overall strategy recommendation ───────────────────────────
+            let strategy, stratRationale;
+            if (trend==='bullish') {
+              strategy      = ivSignal==='high' ? 'Sell Cash-Secured Put' : 'Buy Call';
+              stratRationale= ivSignal==='high'
+                ? 'Bullish trend + elevated IV → sell a put at support to collect premium while waiting for a dip entry'
+                : 'Bullish trend + normal IV → buy a call to participate in upside with defined risk';
+            } else if (trend==='bearish') {
+              strategy      = ivSignal==='high' ? 'Buy Put Debit Spread' : 'Buy Put';
+              stratRationale= ivSignal==='high'
+                ? 'Bearish trend + elevated IV → spread reduces cost and IV-crush risk on a put'
+                : 'Bearish trend + normal IV → buy a put to profit from downside with defined risk';
+            } else {
+              strategy      = ivSignal==='high' ? 'Sell Iron Condor' : 'Wait for Clearer Trend';
+              stratRationale= ivSignal==='high'
+                ? 'Neutral range + high IV → sell both sides of the range to harvest time decay'
+                : 'No clear trend yet — wait for a support/resistance break before committing';
+            }
+
+            // ── Assemble output ────────────────────────────────────────────
+            const makeChain = (ts, strikes, tabLabel, risk, note) => ts ? {
+              label: tabLabel, risk,
+              expiry: new Date(ts*1000).toISOString().slice(0,10),
+              dte: dteFn(ts), note, strikes,
+            } : null;
+
+            optionsData = {
+              iv: rawIV ? r2(rawIV) : null,
+              ivPct: rawIV ? Math.round(rawIV*100) : null,
+              ivSignal,
+              suggestion: { strategy, rationale: stratRationale },
+              chains: {
+                zeroDTE: makeChain(zeroDTEts, zStrikes, '0DTE', 'extreme',
+                  '⚡ Day trade only. Theta is brutal — option loses most value in final hours. Only for confirmed momentum breakouts. Cut losses by 2pm if the trade hasn\'t worked.'),
+                shortTerm: makeChain(shortTs, sStrikes, 'Short Term', 'moderate',
+                  '✓ Sweet spot for swing trades. Enough time for the thesis to play out, theta manageable. Sell at 50% profit — don\'t hold to expiry.'),
+                leap: makeChain(leapTs, lStrikes, 'LEAP', 'conservative',
+                  '🔵 Moves like the stock (Delta 0.65+). Low daily decay. Use as stock replacement — control 100 shares for far less capital. Needs a sustained move over weeks/months.'),
+              },
+            };
+          }
+        }
+      } catch(optErr) {
+        console.warn(`[trade-compass] options fetch failed:`, optErr.message);
+      }
+
+      const data = {
+        symbol,
+        price: {
+          current: r2(currentPrice), change: r2(change), changePct: r2(changePct),
+          dayHigh: todayH, dayLow: todayL,
+          week52High: r2(meta.fiftyTwoWeekHigh??Math.max(...highs)),
+          week52Low:  r2(meta.fiftyTwoWeekLow ??Math.min(...lows)),
+          volume: curVol, avgVolume: Math.round(avgVol), volumeRatio: r2(volRatio),
+          name: meta.shortName??meta.longName??symbol,
+        },
+        today: {
+          open: r2(prevClose), // best proxy; actual open from first bar if intraday data available
+          high: todayH, low: todayL, close: r2(currentPrice), prevClose: r2(prevClose),
+          dayRange, bounceAmt, bounceFromLowPct,
+          closePosition, // 'upper' | 'middle' | 'lower'
+          bodySize, upperWick, lowerWick,
+          isHammer, hasLongLowerWick, hasLongUpperWick, isDoji, isGreenCandle,
+          isHigherHigh, isHigherLow, isLowerHigh, isLowerLow,
+          yesterday: { high: yH, low: yL, close: yC },
+          vwap, isAboveVWAP,
+        },
+        market: marketCtx,
+        technicals: {
+          trend, trendStrength,
+          sma20: sma20?r2(sma20):null, sma50: sma50?r2(sma50):null, sma200: sma200?r2(sma200):null,
+          rsi: rsi?r2(rsi):null, rsiSignal,
+          bollinger: bb?{ upper:r2(bb.upper), middle:r2(bb.middle), lower:r2(bb.lower) }:null,
+          bollingerPosition: bbPos, atr: atr?r2(atr):null,
+        },
+        levels: { supports, resistances },
+        dipAnalysis: {
+          isDipOpportunity: isDip,
+          verdict: dipVerdict,  // 'YES' | 'PARTLY' | 'NO' | 'UNCLEAR'
+          distanceFromSupport: distFromSup,
+          signals: dipSignals,
+          for: dipFor, against: dipAgainst,
+        },
+        analystCall: {
+          verdict: traderVerdict,  // 'BUY' | 'WAIT' | 'NO_TRADE'
+          points: traderPoints,
+          watchAbove, watchBelow,
+        },
+        tradeSetup: { bias: trend, confidence: conf, entryZone, targetPrice, stopLoss, riskReward, rationale: rationale.slice(0,5) },
+        options: optionsData,
+      };
+
+      console.log(`[trade-compass] ${symbol} → ${trend} ${trendStrength} (${conf}%), RSI ${rsi?.toFixed(1)??'n/a'}, dip=${dipVerdict}, call=${traderVerdict}`);
+      res.writeHead(200);
+      res.end(JSON.stringify(data));
+    } catch (err) {
+      console.error('[trade-compass]', err.message);
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   function addMiddleware(server) {
     server.middlewares.use((req, res, next) => {
-      if (req.url?.startsWith('/api/quotes'))     return quotesHandler(req, res);
-      if (req.url?.startsWith('/api/health'))     return healthHandler(req, res);
-      if (req.url?.startsWith('/api/earnings'))   return earningsHandler(req, res);
-      if (req.url?.startsWith('/api/stock-info')) return stockInfoHandler(req, res);
+      if (req.url?.startsWith('/api/quotes'))         return quotesHandler(req, res);
+      if (req.url?.startsWith('/api/health'))         return healthHandler(req, res);
+      if (req.url?.startsWith('/api/earnings'))       return earningsHandler(req, res);
+      if (req.url?.startsWith('/api/stock-info'))     return stockInfoHandler(req, res);
+      if (req.url?.startsWith('/api/trade-compass'))  return tradeCompassHandler(req, res);
       next();
     });
 

@@ -5,26 +5,27 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, List, PlusCircle, Calendar, BarChart2,
   Download, Settings, LogOut, Menu, Sun, Moon, TrendingUp,
-  PieChart, Globe, Newspaper, Calculator, FileText, Zap, MessageCircle, BookOpen, ScanText,
+  PieChart, Globe, Newspaper, Calculator, FileText, Zap, MessageCircle, BookOpen, ScanText, Compass,
 } from 'lucide-react';
 
 const navItems = [
-  { path: '/dashboard',    icon: LayoutDashboard, label: 'Dashboard' },
-  { path: '/transactions', icon: List,            label: 'Transactions' },
-  { path: '/add',          icon: PlusCircle,      label: 'Add Trade' },
-  { path: '/trade-book',  icon: BookOpen,        label: 'Trade Book' },
-  { path: '/daily',        icon: BarChart2,       label: 'Daily View' },
-  { path: '/calendar',     icon: Calendar,        label: 'Calendar' },
-  { path: '/reports',      icon: PieChart,        label: 'Reports' },
-  { path: '/market',       icon: Globe,           label: 'Market Watch' },
-  { path: '/news',         icon: Newspaper,       label: 'News & Research' },
-  { path: '/avg-cost',     icon: Calculator,      label: 'Avg Cost Calc' },
-  { path: '/stock-report', icon: FileText,        label: 'Stock Report' },
-  { path: '/token-usage',  icon: Zap,             label: 'Token Usage' },
+  { path: '/dashboard',      icon: LayoutDashboard, label: 'Dashboard' },
+  { path: '/transactions',   icon: List,            label: 'Transactions' },
+  { path: '/add',            icon: PlusCircle,      label: 'Add Trade' },
+  { path: '/trade-book',     icon: BookOpen,        label: 'Trade Book' },
+  { path: '/daily',          icon: BarChart2,       label: 'Daily View' },
+  { path: '/calendar',       icon: Calendar,        label: 'Calendar' },
+  { path: '/reports',        icon: PieChart,        label: 'Reports' },
+  { path: '/market',         icon: Globe,           label: 'Market Watch' },
+  { path: '/news',           icon: Newspaper,       label: 'News & Research' },
+  { path: '/avg-cost',       icon: Calculator,      label: 'Avg Cost Calc' },
+  { path: '/stock-report',   icon: FileText,        label: 'Stock Report' },
+  { path: '/trade-compass',  icon: Compass,         label: 'Trade Compass' },
+  { path: '/token-usage',    icon: Zap,             label: 'Token Usage' },
   { path: '/xfeed',          icon: MessageCircle,   label: 'X Feed' },
   { path: '/news-analyzer',  icon: ScanText,        label: 'Summarize News' },
   { path: '/export',         icon: Download,        label: 'Import / Export' },
-  { path: '/settings',     icon: Settings,        label: 'Settings' },
+  { path: '/settings',       icon: Settings,        label: 'Settings' },
 ];
 
 export default function Layout({ children }) {

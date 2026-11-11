@@ -23,6 +23,7 @@ import StockReport from './pages/StockReport';
 import TokenDashboard from './pages/TokenDashboard';
 import XFeed from './pages/XFeed';
 import NewsAnalyzer from './pages/NewsAnalyzer';
+import TradeCompass from './pages/TradeCompass';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -70,6 +71,7 @@ export default function App() {
                 <Route path="/xfeed"      element={<PrivateRoute><XFeed /></PrivateRoute>} />
                 <Route path="/trade-book"      element={<PrivateRoute><TradeBook /></PrivateRoute>} />
                 <Route path="/news-analyzer"  element={<PrivateRoute><NewsAnalyzer /></PrivateRoute>} />
+                <Route path="/trade-compass"  element={<PrivateRoute><TradeCompass /></PrivateRoute>} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
               </TradeProvider>
